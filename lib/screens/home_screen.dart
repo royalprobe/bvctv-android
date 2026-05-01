@@ -22,6 +22,8 @@ class VideoItem {
   final String thumbnailUrl;
   final int duration;
   final DateTime? matchDate;
+  final String eventState;
+  final DateTime? scheduledEnd;
 
   const VideoItem({
     required this.id,
@@ -33,7 +35,16 @@ class VideoItem {
     required this.thumbnailUrl,
     required this.duration,
     this.matchDate,
+    this.eventState = 'VOD_PUBLIC',
+    this.scheduledEnd,
   });
+
+  bool get isLive => eventState == 'LIVE';
+  bool get isInstantVod => eventState == 'INSTANT_VOD';
+  bool get isUpcoming {
+    if (matchDate == null) return false;
+    return matchDate!.isAfter(DateTime.now().toUtc());
+  }
 }
 
 class HomeScreen extends StatefulWidget {
@@ -109,6 +120,14 @@ class _HomeScreenState extends State<HomeScreen> {
       final cf = '($_countryFilter)';
       videos = videos.where((v) => v.teams.contains(cf)).toList();
     }
+    // LIVE first, then upcoming, then rest (already sorted by date)
+    videos.sort((a, b) {
+      if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
+      if (a.isUpcoming != b.isUpcoming) return a.isUpcoming ? -1 : 1;
+      if (a.matchDate == null) return 1;
+      if (b.matchDate == null) return -1;
+      return b.matchDate!.compareTo(a.matchDate!);
+    });
     return videos;
   }
 
@@ -186,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     content: const Text('Du wirst ausgeloggt und musst dich erneut anmelden.',
                         style: TextStyle(color: Colors.white70)),
                     actions: [
-                      TextButton(onPressed: () => Navigator.pop(c, false),
+                      TextButton(autofocus: true, onPressed: () => Navigator.pop(c, false),
                           child: const Text('Abbrechen', style: TextStyle(color: Colors.white54))),
                       TextButton(onPressed: () => Navigator.pop(c, true),
                           child: const Text('Abmelden', style: TextStyle(color: Colors.redAccent))),
@@ -235,6 +254,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (commaIdx > 0) return firstPart.substring(0, commaIdx).trim();
     final dashGender = RegExp(r'\s-\s[MW]\s-').firstMatch(firstPart);
     if (dashGender != null) return firstPart.substring(0, dashGender.start).trim();
+    // WM-Format: "Teams - Beach Volleyball - WC - Women/Men"
+    final dashIdx = firstPart.indexOf(' - ');
+    if (dashIdx > 0) return firstPart.substring(0, dashIdx).trim();
     return firstPart.trim();
   }
 
@@ -251,6 +273,9 @@ class _HomeScreenState extends State<HomeScreen> {
     // Alanya dash format: "- W -" / "- M -"
     if (RegExp(r'\s-\sW\s-').hasMatch(title)) return 'Women';
     if (RegExp(r'\s-\sM\s-').hasMatch(title)) return 'Men';
+    // WM/Fallback: "... - Women" / "... - Men"
+    if (RegExp(r'\bWomen\b').hasMatch(title)) return 'Women';
+    if (RegExp(r'\bMen\b').hasMatch(title)) return 'Men';
     return '';
   }
 
@@ -276,8 +301,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final l = raw.toLowerCase();
     if (l.contains('1st') || l.contains('gold')) return 'Finale';
     if (l.contains('3rd') || l.contains('bronze')) return '3. Platz';
-    if (l.contains('semi')) return 'Halbfinale';
-    if (l.contains('quarter')) return 'Viertelfinale';
+    if (l.contains('semi')) return 'Halbfinale';   // vor 'final' prüfen!
+    if (l.contains('quarter')) return 'Viertelfinale'; // vor 'final' prüfen!
+    if (l.contains('final')) return 'Finale';
     if (l.contains('round of 16')) return 'Achtelfinale';
     if (l.contains('pool')) return 'Vorrunde';
     return raw;
@@ -317,35 +343,51 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadTournamentList() async {
     try {
-      final cgRes = await http.get(
-        Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/aBT42rPR'),
-        headers: {'Origin': 'https://tv.volleyballworld.com'},
-      );
-      if (cgRes.statusCode != 200) return;
-      final cgData = jsonDecode(cgRes.body);
-      final playlistsStr = cgData['entry']?[0]?['extensions']?['playlists'] as String? ?? '';
-      final ids = playlistsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      // Playlist-IDs aus allen Competition Groups sammeln
+      final cgPlaylistIds = <String>[];
+      for (final cgId in ['aBT42rPR', 'rkwGm18m']) {
+        try {
+          final cgRes = await http.get(
+            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$cgId'),
+            headers: {'Origin': 'https://tv.volleyballworld.com'},
+          );
+          if (cgRes.statusCode != 200) continue;
+          final cgData = jsonDecode(cgRes.body);
+          final ps = cgData['entry']?[0]?['extensions']?['playlists'] as String? ?? '';
+          final ids = ps.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty);
+          cgPlaylistIds.addAll(ids);
+        } catch (_) {}
+      }
 
-      final futures = ids.map((id) async {
+      Future<Map<String, String>?> fetchPlaylist(String id, {required bool strict}) async {
         try {
           final res = await http.get(
             Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id?overrideFeedType=moreinfo'),
             headers: {'Origin': 'https://tv.volleyballworld.com'},
           );
-          if (res.statusCode == 200) {
-            final data = jsonDecode(res.body);
-            final entries = data['entry'] as List? ?? [];
-            if (entries.length < 5) return null; // Container-Playlist überspringen
-            final title = _extractPlaylistTitle(res.body);
-            return {'id': id, 'title': title.isNotEmpty ? title : id};
-          }
-        } catch (_) {}
-        return null;
-      });
+          if (res.statusCode != 200) return null;
+          final data = jsonDecode(res.body);
+          final entries = data['entry'] as List? ?? [];
+          if (strict && entries.length < 5) return null; // Container-Playlists überspringen
+          if (!strict && entries.isEmpty) return null;
+          final title = _extractPlaylistTitle(res.body);
+          return {'id': id, 'title': title.isNotEmpty ? title : id};
+        } catch (_) {
+          return null;
+        }
+      }
+
+      final futures = cgPlaylistIds.map((id) => fetchPlaylist(id, strict: true));
 
       final results = (await Future.wait(futures))
           .whereType<Map<String, String>>()
           .toList();
+
+      // Virtuelle Turniere (einzelne Media-IDs) anhängen
+      for (final vt in _virtualTournamentData) {
+        results.add({'id': vt['id'] as String, 'title': vt['title'] as String});
+      }
+
       final firstId = results.isNotEmpty ? results.first['id']! : _currentPlaylistId;
 
       if (mounted) {
@@ -362,9 +404,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _allId = '__all__';
 
+  static const List<Map<String, Object>> _virtualTournamentData = [
+    {
+      'id': '__vienna_2024__',
+      'title': 'Vienna Major 2024',
+      'mediaIds': ['4RG6E1wA', 'n6NDlmCj', 'XQVdmpFC', 'laCkprbO', 'FLZtiJ9Z',
+        '8li0jBJe', '5JOX9Zpz', 'BOWRuzeN', 'VywVMOqw', 'd1NqbjrE',
+        'ZpN2Vhnw', 'IRVhVQ2t', 'DCFk0ZYf', 'UVvmO0r9', '5FZAHSsV',
+        '8XUQvIE3', 'ogri3G7h', 'RxqdUmDp', 'usMGFmN4', 'wD1zmqgb',
+        'wtj3USLB', 'N8vHjvMY', 'TTVKq5tB', '2fX2rQ2A', 't3vVHMOk'],
+    },
+    {
+      'id': '__gstaad_2024__',
+      'title': 'Gstaad Elite 16 2024',
+      'mediaIds': ['l0qOShMO', 'I1koTibO', 'iNbKD4di', 'tFFKBGyC', 'fh12jyMp',
+        'Q4fhGHXb', 'n9lNrdhv', '3BKffIP4', 'uJAbnTbv', 'JsNjX9k3',
+        'kC9a5m0F', 'czsKhte7', 'B8DJejXV', 'NTfMsa0g', 'AAuLHsCf',
+        'xgYZIIL6', '9OR1dC3f', 'rF0dKawq', 'uo94x2LN', 'ldSojZLA',
+        '4HeH8h2G', 'fUKcEDwH', 'qqoXMRUo', 'mnLEAed6', 'qL5OiaNx'],
+    },
+  ];
+
   VideoItem _itemFromJson(dynamic item) {
     final title = item['title'] as String? ?? '';
-    final dateStr = item['extensions']?['match_date'] as String?;
+    final dateStr = item['extensions']?['match_date'] as String?
+        ?? item['extensions']?['scheduled_start'] as String?;
+    final endStr = item['extensions']?['scheduled_end'] as String?;
+    final eventState = item['extensions']?['event_state'] as String? ?? 'VOD_PUBLIC';
     return VideoItem(
       id: item['id'] ?? '',
       title: title,
@@ -375,7 +441,29 @@ class _HomeScreenState extends State<HomeScreen> {
       thumbnailUrl: _extractThumbnail(item),
       duration: item['extensions']?['duration'] ?? 0,
       matchDate: dateStr != null ? DateTime.tryParse(dateStr) : null,
+      eventState: eventState,
+      scheduledEnd: endStr != null ? DateTime.tryParse(endStr) : null,
     );
+  }
+
+  Future<List<VideoItem>> _loadVirtualTournament(Map<String, Object> vtData) async {
+    final ctx = _buildCtx();
+    final mediaIds = vtData['mediaIds'] as List<Object?>;
+    final futures = mediaIds.map((mid) async {
+      try {
+        final res = await http.get(
+          Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$mid?ctx=$ctx'),
+          headers: {'Origin': 'https://tv.volleyballworld.com'},
+        );
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          final entries = data['entry'] as List? ?? [];
+          if (entries.isNotEmpty) return _itemFromJson(entries.first);
+        }
+      } catch (_) {}
+      return null;
+    });
+    return (await Future.wait(futures)).whereType<VideoItem>().toList();
   }
 
   Future<void> _loadVideos([String? playlistId]) async {
@@ -383,9 +471,27 @@ class _HomeScreenState extends State<HomeScreen> {
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
     setState(() { _isLoading = true; _errorMessage = null; });
     try {
+      // Virtuelles Turnier (einzelne Media-IDs)
+      if (pid.startsWith('__') && pid != _allId) {
+        final vtData = _virtualTournamentData.cast<Map<String, Object>>()
+            .firstWhere((v) => v['id'] == pid, orElse: () => const {});
+        if (vtData.isNotEmpty) {
+          final videos = await _loadVirtualTournament(vtData)
+            ..sort((a, b) {
+              if (a.matchDate == null) return 1;
+              if (b.matchDate == null) return -1;
+              return b.matchDate!.compareTo(a.matchDate!);
+            });
+          if (mounted) setState(() => _videos = videos);
+        }
+        return;
+      }
+
       if (pid == _allId) {
         final ctx = _buildCtx();
-        final futures = _availableTournaments.map((t) async {
+        final playlistFutures = _availableTournaments
+            .where((t) => !t['id']!.startsWith('__'))
+            .map((t) async {
           try {
             final res = await http.get(
               Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/${t['id']}?overrideFeedType=moreinfo&ctx=$ctx'),
@@ -398,7 +504,9 @@ class _HomeScreenState extends State<HomeScreen> {
           } catch (_) {}
           return <VideoItem>[];
         });
-        final all = (await Future.wait(futures)).expand((l) => l).toList();
+        final vtFutures = _virtualTournamentData.map(_loadVirtualTournament);
+        final allResults = await Future.wait([...playlistFutures, ...vtFutures]);
+        final all = allResults.expand((l) => l).toList();
         final seen = <String>{};
         final unique = all.where((v) => seen.add(v.id)).toList()
           ..sort((a, b) {
@@ -435,13 +543,59 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openVideo(VideoItem video) {
+    if (video.isLive) {
+      _showLiveDialog(video);
+      return;
+    }
+    _launchPlayer(video, seekToLive: false);
+  }
+
+  void _launchPlayer(VideoItem video, {required bool seekToLive}) {
     final selfLink = Uri.encodeComponent(
       'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
     );
     final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
     Navigator.push(context, MaterialPageRoute(
-      builder: (_) => WebViewPlayerScreen(title: video.teams, playerUrl: playerUrl, useRealDuration: !_twoHourMode),
+      builder: (_) => WebViewPlayerScreen(
+        title: video.teams,
+        playerUrl: playerUrl,
+        useRealDuration: !_twoHourMode,
+        seekToLive: seekToLive,
+      ),
     ));
+  }
+
+  void _showLiveDialog(VideoItem video) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)),
+            child: const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(child: Text('Live-Spiel', style: TextStyle(color: Colors.white))),
+        ]),
+        content: Text(
+          'Dieses Spiel läuft gerade live.\nMöchtest du von Anfang an schauen oder direkt einsteigen?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () { Navigator.pop(ctx); _launchPlayer(video, seekToLive: false); },
+            child: const Text('Von Anfang an', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () { Navigator.pop(ctx); _launchPlayer(video, seekToLive: true); },
+            child: const Text('Live einsteigen', style: TextStyle(color: Colors.orange)),
+          ),
+        ],
+      ),
+    );
   }
 
   String _formatDate(DateTime? date) {
@@ -466,11 +620,36 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _statusBadge(VideoItem video) {
+    if (video.isLive) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(3)),
+        child: const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      );
+    }
+    if (video.isUpcoming) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFFE65100), borderRadius: BorderRadius.circular(3)),
+        child: const Text('BALD', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      );
+    }
+    if (video.isInstantVod) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFF2E7D32), borderRadius: BorderRadius.circular(3)),
+        child: const Text('NEU', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   Widget _filterChip(String label, String value, {bool autofocus = false}) {
     final selected = _genderFilter == value;
     return _TvFocusButton(
       autofocus: autofocus,
-      onPressed: () => setState(() { _genderFilter = value; _playerFilter = null; _countryFilter = null; }),
+      onPressed: () => setState(() { _genderFilter = value; }),
       borderRadius: 20,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -503,53 +682,43 @@ class _HomeScreenState extends State<HomeScreen> {
         : _availableTournaments
             .firstWhere((t) => t['id'] == _currentPlaylistId, orElse: () => {'title': 'Turnier'})['title']!;
 
+    Future<void> open() async {
+      final result = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: const Color(0xFF1A1A1A),
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (_) => _TournamentSheet(
+          tournaments: _availableTournaments,
+          currentId: _currentPlaylistId,
+          allId: _allId,
+        ),
+      );
+      if (result == null) return;
+      if (result != _currentPlaylistId) _loadVideos(result);
+    }
+
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 160),
-      child: _TvFocusWrapper(
+      child: _TvFocusButton(
+        onPressed: open,
         borderRadius: 20,
-        child: PopupMenuButton<String>(
-          onSelected: (id) {
-            if (id == _currentPlaylistId) return;
-            _loadVideos(id);
-          },
-          color: const Color(0xFF2A2A2A),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          constraints: const BoxConstraints(minWidth: 220),
-          itemBuilder: (_) => [
-            PopupMenuItem<String>(
-              value: _allId,
-              child: Text('Alle Turniere', style: TextStyle(
-                color: isAll ? Colors.orange : Colors.white70,
-                fontWeight: isAll ? FontWeight.bold : FontWeight.normal,
-                fontSize: 13,
-              )),
-            ),
-            ..._availableTournaments.map((t) => PopupMenuItem<String>(
-              value: t['id']!,
-              child: Text(t['title']!,
-                style: TextStyle(
-                  color: t['id'] == _currentPlaylistId ? Colors.orange : Colors.white70,
-                  fontWeight: t['id'] == _currentPlaylistId ? FontWeight.bold : FontWeight.normal,
-                  fontSize: 13,
-                )),
-            )),
-          ],
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.orange),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Flexible(child: Text(isAll ? 'Alle' : _shortTitle(currentTitle),
-                style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              )),
-              const SizedBox(width: 4),
-              const Icon(Icons.arrow_drop_down, size: 18, color: Colors.orange),
-            ]),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.orange),
           ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(child: Text(isAll ? 'Alle' : _shortTitle(currentTitle),
+              style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
+            )),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_drop_down, size: 18, color: Colors.orange),
+          ]),
         ),
       ),
     );
@@ -647,33 +816,41 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
         padding: const EdgeInsets.all(10),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            _genderBadge(video.gender),
-            if (video.gender.isNotEmpty) const SizedBox(width: 6),
-            Expanded(child: Text(video.round,
-              style: const TextStyle(color: Colors.white60, fontSize: 10),
-              overflow: TextOverflow.ellipsis)),
-          ]),
-          const SizedBox(height: 6),
-          if (spoiler)
-            Row(children: [
-              const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
-              const SizedBox(width: 4),
-              const Expanded(child: Text('Spoiler-Schutz aktiv',
-                style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
-            ])
-          else
-            Text(video.teams,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-              maxLines: 2, overflow: TextOverflow.ellipsis),
-          const Spacer(),
-          Text(video.tournament,
-            style: const TextStyle(color: Colors.white38, fontSize: 10),
-            overflow: TextOverflow.ellipsis),
-          Text(_formatDate(video.matchDate),
-            style: const TextStyle(color: Colors.white38, fontSize: 10)),
-        ]),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                _genderBadge(video.gender),
+                if (video.gender.isNotEmpty) const SizedBox(width: 6),
+                Expanded(child: Text(video.round,
+                  style: const TextStyle(color: Colors.white60, fontSize: 10),
+                  overflow: TextOverflow.ellipsis)),
+                _statusBadge(video),
+              ]),
+              const SizedBox(height: 6),
+              if (spoiler)
+                Row(children: [
+                  const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
+                  const SizedBox(width: 4),
+                  const Expanded(child: Text('Spoiler-Schutz aktiv',
+                    style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
+                ])
+              else
+                Text(video.teams,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+            ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(video.tournament,
+                style: const TextStyle(color: Colors.white38, fontSize: 10),
+                overflow: TextOverflow.ellipsis),
+              Text(_formatDate(video.matchDate),
+                style: const TextStyle(color: Colors.white38, fontSize: 10)),
+            ]),
+          ],
+        ),
       ),
     );
   }
@@ -693,6 +870,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(color: Colors.white70)),
             actions: [
               TextButton(
+                autofocus: true,
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Abbrechen', style: TextStyle(color: Colors.white54)),
               ),
@@ -752,16 +930,39 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : LayoutBuilder(builder: (context, constraints) {
                             final isTV = constraints.maxWidth > 900 || constraints.maxHeight > 900;
-                            return GridView.builder(
-                              padding: const EdgeInsets.all(12),
-                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: isTV ? 5 : 2,
-                                childAspectRatio: isTV ? 2.0 : 1.55,
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
+                            final crossAxisCount = isTV ? 5 : 2;
+                            const spacing = 10.0;
+                            const pad = 12.0;
+
+                            SliverGridDelegate gridDelegate;
+                            if (isTV) {
+                              // Nur top-pad + 1 spacing abziehen (statt 2 spacings).
+                              // Zeile 4 startet dann ~20px jenseits constraints.maxHeight und bleibt
+                              // auch auf dem Fire Stick (wo ~10-12px extra sichtbar sind) unsichtbar.
+                              const nRows = 3;
+                              final tileHeight = ((constraints.maxHeight - pad - spacing) / nRows).floorToDouble();
+                              gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                mainAxisExtent: tileHeight,
+                                crossAxisSpacing: spacing,
+                                mainAxisSpacing: spacing,
+                              );
+                            } else {
+                              gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                childAspectRatio: 1.4,
+                                crossAxisSpacing: spacing,
+                                mainAxisSpacing: spacing,
+                              );
+                            }
+
+                            return ClipRect(
+                              child: GridView.builder(
+                                padding: const EdgeInsets.all(pad),
+                                gridDelegate: gridDelegate,
+                                itemCount: _filteredVideos.length,
+                                itemBuilder: (_, i) => _buildVideoCard(_filteredVideos[i]),
                               ),
-                              itemCount: _filteredVideos.length,
-                              itemBuilder: (_, i) => _buildVideoCard(_filteredVideos[i]),
                             );
                           }),
                   ),
@@ -811,7 +1012,10 @@ class _TvFocusButtonState extends State<_TvFocusButton> {
           duration: const Duration(milliseconds: 100),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(widget.borderRadius + 3),
-            border: _focused ? Border.all(color: Colors.orange, width: 3) : null,
+            border: Border.all(
+              color: _focused ? Colors.orange : Colors.transparent,
+              width: 3,
+            ),
             boxShadow: _focused
                 ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.6), blurRadius: 10, spreadRadius: 1)]
                 : null,
@@ -845,7 +1049,7 @@ class _TvFocusWrapperState extends State<_TvFocusWrapper> {
         duration: const Duration(milliseconds: 100),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(widget.borderRadius + 3),
-          border: _focused ? Border.all(color: Colors.orange, width: 3) : null,
+          border: Border.all(color: _focused ? Colors.orange : Colors.transparent, width: 3),
           boxShadow: _focused
               ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.6), blurRadius: 10, spreadRadius: 1)]
               : null,
@@ -853,6 +1057,80 @@ class _TvFocusWrapperState extends State<_TvFocusWrapper> {
         child: widget.child,
       ),
     );
+  }
+}
+
+class _TournamentSheet extends StatefulWidget {
+  final List<Map<String, String>> tournaments;
+  final String currentId;
+  final String allId;
+
+  const _TournamentSheet({required this.tournaments, required this.currentId, required this.allId});
+
+  @override
+  State<_TournamentSheet> createState() => _TournamentSheetState();
+}
+
+class _TournamentSheetState extends State<_TournamentSheet> {
+  final _firstFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _firstFocus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _firstFocus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [
+      {'id': widget.allId, 'title': 'Alle Turniere'},
+      ...widget.tournaments,
+    ];
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        margin: const EdgeInsets.symmetric(vertical: 10),
+        width: 40, height: 4,
+        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+      ),
+      Flexible(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(items.length, (i) {
+              final id = items[i]['id']!;
+              final title = items[i]['title']!;
+              final isActive = id == widget.currentId;
+              return Focus(
+                onKeyEvent: i == 0 ? (_, event) {
+                  if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                } : null,
+                child: ListTile(
+                  focusNode: i == 0 ? _firstFocus : null,
+                  title: Text(title, style: TextStyle(
+                    color: isActive ? Colors.orange : Colors.white70,
+                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                  )),
+                  trailing: isActive ? const Icon(Icons.check, color: Colors.orange, size: 18) : null,
+                  onTap: () => Navigator.pop(context, id),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+    ]);
   }
 }
 
@@ -867,6 +1145,10 @@ class _PlayerSearchSheet extends StatefulWidget {
 
 class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
   final _ctrl = TextEditingController();
+  final _firstFocus = FocusNode();
+  final _searchFocus = FocusNode();
+  bool _searchActive = false;
+  bool _searchFocused = false;
   late List<String> _filtered;
 
   @override
@@ -881,11 +1163,22 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
             : widget.players.where((p) => p.toLowerCase().contains(q)).toList();
       });
     });
+    _searchFocus.addListener(() {
+      if (mounted) setState(() {
+        _searchFocused = _searchFocus.hasFocus;
+        if (!_searchFocus.hasFocus) _searchActive = false;
+      });
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _firstFocus.requestFocus();
+    });
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _firstFocus.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -901,9 +1194,31 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: TextField(
+          child: Focus(
+            onFocusChange: (hasFocus) {
+              if (mounted) setState(() {
+                _searchFocused = hasFocus;
+                if (!hasFocus && !_searchFocus.hasFocus) _searchActive = false;
+              });
+            },
+            onKeyEvent: (_, event) {
+              if (!_searchActive && event is KeyDownEvent &&
+                  (event.logicalKey == LogicalKeyboardKey.select ||
+                   event.logicalKey == LogicalKeyboardKey.enter)) {
+                setState(() => _searchActive = true);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _searchFocus.requestFocus();
+                });
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: TextField(
             controller: _ctrl,
-            autofocus: true,
+            focusNode: _searchFocus,
+            autofocus: false,
+            readOnly: !_searchActive,
+            onTap: () { if (!_searchActive) setState(() => _searchActive = true); },
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               hintText: 'Spieler suchen...',
@@ -916,18 +1231,20 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
                     )
                   : null,
               filled: true,
-              fillColor: const Color(0xFF2A2A2A),
+              fillColor: _searchActive || _searchFocused ? const Color(0xFF2A2A2A) : const Color(0xFF161616),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide.none,
               ),
             ),
           ),
+          ),
         ),
         ConstrainedBox(
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
           child: ListView(shrinkWrap: true, children: [
             ListTile(
+              focusNode: _firstFocus,
               leading: Icon(Icons.people, size: 20,
                   color: widget.selected == null ? Colors.orange : Colors.white38),
               title: Text('Alle Spieler', style: TextStyle(
@@ -998,7 +1315,8 @@ class WebViewPlayerScreen extends StatefulWidget {
   final String title;
   final String playerUrl;
   final bool useRealDuration;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false});
+  final bool seekToLive;
+  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false});
 
   @override
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
@@ -1030,12 +1348,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   double _playbackRate = 1.0;
   DateTime? _lastUserToggle;
 
-  List<Map<String, dynamic>> _qualityLevels = [];
-  int _currentQualityIndex = -1; // -1 = Auto
-
-  int _seekClickCount = 0;
+  int _seekClickCount = 0; // positiv = vorwärts, negativ = rückwärts
   int _pendingSeekSeconds = 0;
-  bool _seekingForward = true;
   bool _showSeekOverlay = false;
   String _seekOverlayText = '';
   Timer? _seekTimer;
@@ -1043,8 +1357,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   Timer? _positionTimer;
   Timer? _blackScreenTimer;
 
-  // 1x=5s 2x=10s 3x=30s 4x=1min 5x=3min 6x=5min 7x=10min 8x=20min, danach +10min
-  final List<int> _seekSteps = [5, 10, 30, 60, 180, 300, 600, 1200];
+  // 1x=10s 2x=30s 3x=1min 4x=3min 5x=5min 6x=10min 7x=20min 8x=30min, danach +30min
+  final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
 
   bool _handleRemoteKey(KeyEvent event) {
     if (!mounted || !_playerReady) return false;
@@ -1093,7 +1407,89 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
+      ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) {
+          _controller.runJavaScript(r'''
+            (function() {
+              if (window._qualityPatched) return;
+              window._qualityPatched = true;
+
+              try {
+                Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
+                Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
+                Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
+                Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
+                Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
+              } catch(e) {}
+
+              function _filterM3u8(t) {
+                if (t.indexOf('#EXT-X-STREAM-INF') < 0) return t;
+                var lines = t.split('\n'), best = null, bestBw = -1;
+                for (var i = 0; i < lines.length; i++) {
+                  var ln = lines[i].replace('\r','');
+                  if (ln.indexOf('#EXT-X-STREAM-INF') !== 0) continue;
+                  var m = ln.match(/BANDWIDTH=(\d+)/);
+                  var bw = m ? parseInt(m[1]) : 0, ul = '';
+                  for (var j = i+1; j < lines.length; j++) {
+                    var jl = lines[j].trim();
+                    if (jl && jl[0] !== '#') { ul = jl; break; }
+                  }
+                  if (bw > bestBw) { bestBw = bw; best = {inf: lines[i], url: ul}; }
+                }
+                if (!best) return t;
+                var hdr = [];
+                for (var k = 0; k < lines.length; k++) {
+                  if (lines[k].replace('\r','').indexOf('#EXT-X-STREAM-INF') === 0) break;
+                  hdr.push(lines[k]);
+                }
+                return hdr.join('\n') + '\n' + best.inf + '\n' + best.url + '\n';
+              }
+
+              var _proto = XMLHttpRequest.prototype;
+              var _origOpen = _proto.open;
+              var _rtDesc = Object.getOwnPropertyDescriptor(_proto, 'responseText');
+              var _rDesc  = Object.getOwnPropertyDescriptor(_proto, 'response');
+
+              _proto.open = function(method, url) {
+                this._reqUrl = typeof url === 'string' ? url : '';
+                var res = _origOpen.apply(this, arguments);
+                if (this._reqUrl.indexOf('.m3u8') >= 0) {
+                  var self = this, _filtered = null;
+                  var rtGet = _rtDesc && _rtDesc.get;
+                  var rGet  = _rDesc  && _rDesc.get;
+                  function _get() {
+                    if (_filtered) return _filtered;
+                    try {
+                      var raw = rtGet ? rtGet.call(self) : '';
+                      if (raw && raw.indexOf('#EXT-X-STREAM-INF') >= 0) {
+                        _filtered = _filterM3u8(raw);
+                        return _filtered;
+                      }
+                      return raw || '';
+                    } catch(e) { return ''; }
+                  }
+                  Object.defineProperty(self, 'responseText', {get: _get, configurable: true});
+                  Object.defineProperty(self, 'response', {
+                    get: function() {
+                      if (_filtered) return _filtered;
+                      try {
+                        var raw = rGet ? rGet.call(self) : (rtGet ? rtGet.call(self) : '');
+                        if (raw && typeof raw === 'string' && raw.indexOf('#EXT-X-STREAM-INF') >= 0) {
+                          _filtered = _filterM3u8(raw);
+                          return _filtered;
+                        }
+                        return raw;
+                      } catch(e) { return ''; }
+                    },
+                    configurable: true
+                  });
+                }
+                return res;
+              };
+            })();
+          ''');
+        },
         onPageFinished: (_) {
           _onPageFinished();
           // Fallback: nur wenn ready-Event nie kommt
@@ -1103,33 +1499,17 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               _startHideControlsTimer();
               _startPositionPolling();
             }
-            // Quality-Levels nachholen falls ready-Event verpasst
-            if (mounted) {
-              _controller.runJavaScript('''
-                try {
-                  var p = jwplayer();
-                  if (p && p.getQualityLevels) {
-                    var lv = p.getQualityLevels();
-                    if (lv && lv.length > 0) {
-                      FlutterChannel.postMessage(JSON.stringify({
-                        type: 'qualities', levels: lv,
-                        currentQuality: p.getCurrentQuality ? (p.getCurrentQuality() || 0) : 0
-                      }));
-                    }
-                  }
-                } catch(e) {}
-              ''');
-            }
           });
         },
-      ))
-      ..loadRequest(Uri.parse(widget.playerUrl));
+      ));
 
-    // Android: Autoplay ohne User-Gesture erlauben
+    // Android: Autoplay VOR loadRequest setzen damit kein Race Condition entsteht
     if (_controller.platform is AndroidWebViewController) {
       (_controller.platform as AndroidWebViewController)
           .setMediaPlaybackRequiresUserGesture(false);
     }
+
+    _controller.loadRequest(Uri.parse(widget.playerUrl));
   }
 
   // Findet das <video>-Element im Hauptframe oder in iframes
@@ -1230,6 +1610,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         } catch(e) {}
       }, 500);
 
+
       // Hebt <video> über alle JW Player UI-Elemente (Titel, Controlbar, Overlays)
       var _jwCss = [
         'video{position:fixed!important;top:0!important;left:0!important;',
@@ -1303,11 +1684,19 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         });
       }, 150);
 
-      function _sendQualities(p) {
-        try {
-          var levels = []; try { levels = p.getQualityLevels(); } catch(e) {}
-          FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration(), qualities: levels, currentQuality: p.getCurrentQuality()}));
-        } catch(e) {}
+      var _qualityForced = false;
+      function _forceMaxQuality(p) {
+        if (_qualityForced) return;
+        var levels = [];
+        try { levels = p.getQualityLevels(); } catch(e) {}
+        if (!levels || levels.length === 0) return;
+        _qualityForced = true;
+        var bestIdx = 0, bestVal = -1;
+        for (var i = 0; i < levels.length; i++) {
+          var v = (levels[i].bitrate > 0) ? levels[i].bitrate : (levels[i].height || 0);
+          if (v > bestVal) { bestVal = v; bestIdx = i; }
+        }
+        try { p.setCurrentQuality(bestIdx); } catch(e) {}
       }
 
       var attempts = 0;
@@ -1317,34 +1706,33 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           var p = jwplayer();
           if (p && p.getState) {
             try { var v = $_jsGetVideo; if (v) _flutterSetupVideo(v); } catch(e) {}
-
-            // Player bereits bereit? Sofort Quality-Daten senden
-            var st = p.getState();
-            if (st && st !== 'idle' && st !== '') {
-              _sendQualities(p);
-              // Nochmal nach 1s (HLS-Level laden ggf. nach)
-              setTimeout(function() { _sendQualities(p); }, 1000);
-            }
-
             p.on('ready', function() {
-              _sendQualities(p);
+              FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
               setTimeout(function() {
-                _sendQualities(p); // Nochmal nach 1s für HLS
+                _forceMaxQuality(p);
                 if(window.flShowControls) window.flShowControls();
-              }, 1000);
+                ${widget.seekToLive ? '''
+                try {
+                  var dur = p.getDuration();
+                  if (dur && isFinite(dur) && dur > 10) {
+                    p.seek(Math.max(0, dur - 10));
+                  } else {
+                    var v = $_jsGetVideo;
+                    if (v && v.seekable && v.seekable.length > 0) {
+                      v.currentTime = Math.max(0, v.seekable.end(0) - 5);
+                    }
+                  }
+                } catch(e) {}
+                ''' : ''}
+              }, 600);
             });
+            p.on('levels', function() { _forceMaxQuality(p); });
             p.on('play',  function() {
               if (!window._flutterPaused) FlutterChannel.postMessage(JSON.stringify({type:'play'}));
             });
             p.on('pause', function() { FlutterChannel.postMessage(JSON.stringify({type:'pause'})); });
             p.on('time',  function(e) { FlutterChannel.postMessage(JSON.stringify({type:'time', pos: e.position, dur: e.duration})); });
             p.on('complete', function() { FlutterChannel.postMessage(JSON.stringify({type:'complete'})); });
-            p.on('levels', function(e) {
-              FlutterChannel.postMessage(JSON.stringify({type:'qualities', levels: e.levels, currentQuality: e.currentQuality}));
-            });
-            p.on('levelsChanged', function(e) {
-              FlutterChannel.postMessage(JSON.stringify({type:'qualityChange', currentQuality: e.currentQuality}));
-            });
             clearInterval(init);
           }
         } catch(e) {}
@@ -1386,7 +1774,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       case 'fastForward': _changePlaybackRate(true);  break;
       case 'rewind':      _changePlaybackRate(false); break;
       case 'back':
-        if (mounted) Navigator.pop(context);
+        if (mounted) _closePlayer();
         break;
     }
   }
@@ -1397,20 +1785,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       final type = data['type'];
       if (type == 'ready') {
         final dur = (data['dur'] ?? 0).toDouble();
-        final levels = (data['qualities'] as List? ?? [])
-            .map((l) => Map<String, dynamic>.from(l as Map))
-            .toList();
-        final curQ = (data['currentQuality'] ?? -1) as int;
         _startPositionPolling();
         Future.delayed(const Duration(milliseconds: 300), () {
           if (mounted) {
-            setState(() {
-              _playerReady = true;
-              _realDuration = dur;
-              _isPlaying = true;
-              _qualityLevels = levels;
-              _currentQualityIndex = curQ;
-            });
+            setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
             _startHideControlsTimer();
             final safeTitle = widget.title.replaceAll("'", "\\'");
             _controller.runJavaScript("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
@@ -1435,16 +1813,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             }
           });
         }
-      } else if (type == 'qualities') {
-        final levels = (data['levels'] as List? ?? [])
-            .map((l) => Map<String, dynamic>.from(l as Map))
-            .toList();
-        if (mounted) setState(() {
-          _qualityLevels = levels;
-          _currentQualityIndex = (data['currentQuality'] ?? -1) as int;
-        });
-      } else if (type == 'qualityChange') {
-        if (mounted) setState(() => _currentQualityIndex = (data['currentQuality'] ?? -1) as int);
       } else if (type == 'key') {
         _handleJsKey(data['key'] as String? ?? '');
       } else if (type == 'complete') {
@@ -1518,17 +1886,13 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         _controller.runJavaScript('if(window.flutterPause) window.flutterPause();');
       }
     }
-    if (nowPlaying) {
-      _startHideControlsTimer(); // beim Abspielen nach 2s ausblenden
-    } else {
-      _hideControlsTimer?.cancel(); // beim Pausieren dauerhaft sichtbar lassen
-    }
+    _startHideControlsTimer();
   }
 
   void _startHideControlsTimer() {
     _hideControlsTimer?.cancel();
-    _hideControlsTimer = Timer(Duration(seconds: _isTV ? 2 : 5), () {
-      if (mounted && _isPlaying) setState(() => _showControls = false);
+    _hideControlsTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showControls = false);
     });
   }
 
@@ -1552,20 +1916,27 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
 
   void _seek(bool forward) {
-    if (_seekingForward != forward) { _seekClickCount = 0; _pendingSeekSeconds = 0; }
-    _seekingForward = forward;
-    _seekClickCount++;
-    _pendingSeekSeconds = _getSeekSeconds(_seekClickCount);
-    final seekText = '${forward ? '+' : '-'}${_formatSeekTime(_pendingSeekSeconds)}';
+    _seekTimer?.cancel();
+    _seekClickCount += forward ? 1 : -1;
+
+    if (_seekClickCount == 0) {
+      _pendingSeekSeconds = 0;
+      setState(() { _showSeekOverlay = false; });
+      return;
+    }
+
+    final isForward = _seekClickCount > 0;
+    final absCount = _seekClickCount.abs();
+    _pendingSeekSeconds = _getSeekSeconds(absCount);
+    final seekText = '${isForward ? '+' : '-'}${_formatSeekTime(_pendingSeekSeconds)}';
     setState(() {
       _showSeekOverlay = true;
       _showControls = true;
       _seekOverlayText = seekText;
     });
     _controller.runJavaScript("if(window.flShowSeek) window.flShowSeek('$seekText');");
-    _seekTimer?.cancel();
     _seekTimer = Timer(const Duration(milliseconds: 600), () {
-      final target = forward
+      final target = isForward
           ? _fakePosition + Duration(seconds: _pendingSeekSeconds)
           : _fakePosition - Duration(seconds: _pendingSeekSeconds);
       _seekToFakePosition(target);
@@ -1589,12 +1960,29 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
 
   @override
+  void _closePlayer() {
+    _controller.runJavaScript(
+      'try{jwplayer().stop();}catch(e){}'
+      'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
+    );
+    _controller.loadRequest(Uri.parse('about:blank'));
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleRemoteKey);
     _seekTimer?.cancel();
     _hideControlsTimer?.cancel();
     _positionTimer?.cancel();
     _blackScreenTimer?.cancel();
+    try {
+      _controller.runJavaScript(
+        'try{jwplayer().stop();}catch(e){}'
+        'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
+      );
+      _controller.loadRequest(Uri.parse('about:blank'));
+    } catch (_) {}
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([]);
     super.dispose();
@@ -1606,7 +1994,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        Navigator.pop(context);
+        _closePlayer();
       },
       child: Scaffold(
       backgroundColor: Colors.black,
@@ -1677,7 +2065,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
             decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(_seekingForward ? Icons.fast_forward : Icons.fast_rewind, color: Colors.orange, size: 48),
+              Icon(_seekClickCount >= 0 ? Icons.fast_forward : Icons.fast_rewind, color: Colors.orange, size: 48),
               const SizedBox(height: 8),
               Text(_seekOverlayText, style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
               Text('Klick $_seekClickCount', style: const TextStyle(color: Colors.white54, fontSize: 14)),
@@ -1686,13 +2074,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
           // Controls ein/ausblenden per Tap auf die Mitte (wo keine Seek-Bereiche sind)
           if (_showControls) _buildControls(),
-
-          // Dauerhaftes Qualitäts-Overlay oben rechts (immer sichtbar)
-          Positioned(
-            top: 16,
-            right: 16,
-            child: _buildQualityOverlay(),
-          ),
         ]),
       ),
     );
@@ -1718,129 +2099,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     );
   }
 
-  void _setQuality(int index) {
-    setState(() => _currentQualityIndex = index);
-    _controller.runJavaScript('try { jwplayer().setCurrentQuality($index); } catch(e) {}');
-    _startHideControlsTimer();
-  }
-
-  Widget _buildQualityOverlay() {
-    final hasLevels = _qualityLevels.isNotEmpty;
-    final label = hasLevels
-        ? (_currentQualityIndex >= 0 && _currentQualityIndex < _qualityLevels.length
-            ? (_qualityLevels[_currentQualityIndex]['label'] as String? ??
-               '${_qualityLevels[_currentQualityIndex]['height']}p')
-            : 'AUTO')
-        : 'Qualität lädt...';
-    if (!hasLevels) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white24),
-        ),
-        child: Text(label, style: const TextStyle(color: Colors.white38, fontSize: 12)),
-      );
-    }
-    return PopupMenuButton<int>(
-      onSelected: _setQuality,
-      color: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      itemBuilder: (_) => [
-        PopupMenuItem<int>(
-          value: -1,
-          child: Text('Auto', style: TextStyle(
-            color: _currentQualityIndex == -1 ? Colors.orange : Colors.white70,
-            fontWeight: _currentQualityIndex == -1 ? FontWeight.bold : FontWeight.normal,
-          )),
-        ),
-        ..._qualityLevels.asMap().entries.map((e) {
-          final lbl = e.value['label'] as String? ?? '${e.value['height']}p';
-          final bitrate = e.value['bitrate'] as int? ?? 0;
-          final sub = bitrate > 0 ? '${(bitrate / 1000000).toStringAsFixed(1)} Mbit/s' : '';
-          return PopupMenuItem<int>(
-            value: e.key,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(lbl, style: TextStyle(
-                color: e.key == _currentQualityIndex ? Colors.orange : Colors.white70,
-                fontWeight: e.key == _currentQualityIndex ? FontWeight.bold : FontWeight.normal,
-              )),
-              if (sub.isNotEmpty)
-                Text(sub, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-            ]),
-          );
-        }),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.orange),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.hd, color: Colors.orange, size: 16),
-          const SizedBox(width: 5),
-          Text(label, style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold)),
-          const SizedBox(width: 3),
-          const Icon(Icons.arrow_drop_down, color: Colors.orange, size: 16),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildQualityButton() {
-    final label = _currentQualityIndex >= 0 && _currentQualityIndex < _qualityLevels.length
-        ? (_qualityLevels[_currentQualityIndex]['label'] as String? ??
-           '${_qualityLevels[_currentQualityIndex]['height']}p')
-        : 'AUTO';
-    return PopupMenuButton<int>(
-      onSelected: _setQuality,
-      color: const Color(0xFF2A2A2A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      itemBuilder: (_) => [
-        PopupMenuItem<int>(
-          value: -1,
-          child: Text('Auto', style: TextStyle(
-            color: _currentQualityIndex == -1 ? Colors.orange : Colors.white70,
-            fontWeight: _currentQualityIndex == -1 ? FontWeight.bold : FontWeight.normal,
-          )),
-        ),
-        ..._qualityLevels.asMap().entries.map((e) {
-          final lbl = e.value['label'] as String? ?? '${e.value['height']}p';
-          final bitrate = e.value['bitrate'] as int? ?? 0;
-          final sub = bitrate > 0 ? '${(bitrate / 1000000).toStringAsFixed(1)} Mbit/s' : '';
-          return PopupMenuItem<int>(
-            value: e.key,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(lbl, style: TextStyle(
-                color: e.key == _currentQualityIndex ? Colors.orange : Colors.white70,
-                fontWeight: e.key == _currentQualityIndex ? FontWeight.bold : FontWeight.normal,
-              )),
-              if (sub.isNotEmpty)
-                Text(sub, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-            ]),
-          );
-        }),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white38),
-          borderRadius: BorderRadius.circular(5),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.hd, color: Colors.white70, size: 16),
-          const SizedBox(width: 5),
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
-          const SizedBox(width: 3),
-          const Icon(Icons.arrow_drop_down, color: Colors.white38, size: 16),
-        ]),
-      ),
-    );
-  }
-
   Widget _buildControls() {
     final progress = (_fakePosition.inMilliseconds / _effectiveDuration.inMilliseconds).clamp(0.0, 1.0);
     return Stack(children: [
@@ -1859,8 +2117,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             Expanded(child: Text(widget.title,
                 style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                 overflow: TextOverflow.ellipsis)),
-            if (_qualityLevels.isNotEmpty) _buildQualityButton(),
-            const SizedBox(width: 8),
           ]),
         ),
       ),
