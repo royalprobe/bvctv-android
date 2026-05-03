@@ -45,6 +45,24 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 endfunction()
 
+# Add ATL include path from VS 2022 if not found in current toolchain
+if(MSVC AND NOT EXISTS "${CMAKE_CXX_COMPILER}/../atlmfc/include/atlstr.h")
+  file(GLOB ATL_INCLUDE_DIRS
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/*/atlmfc/include"
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/*/atlmfc/include"
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/Professional/VC/Tools/MSVC/*/atlmfc/include"
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/atlmfc/include"
+  )
+  if(ATL_INCLUDE_DIRS)
+    list(GET ATL_INCLUDE_DIRS 0 ATL_INCLUDE_DIR)
+    include_directories(SYSTEM "${ATL_INCLUDE_DIR}")
+    get_filename_component(ATL_BASE_DIR "${ATL_INCLUDE_DIR}/.." ABSOLUTE)
+    link_directories("${ATL_BASE_DIR}/lib/x64")
+    message(STATUS "ATL include dir: ${ATL_INCLUDE_DIR}")
+    message(STATUS "ATL lib dir: ${ATL_BASE_DIR}/lib/x64")
+  endif()
+endif()
+
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})

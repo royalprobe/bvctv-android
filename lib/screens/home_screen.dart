@@ -9,8 +9,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:async';
+import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
+import 'dart:io' show Platform;
+import '../services/update_checker.dart';
 
 class VideoItem {
   final String id;
@@ -39,8 +43,13 @@ class VideoItem {
     this.scheduledEnd,
   });
 
-  bool get isLive => eventState == 'LIVE';
-  bool get isInstantVod => eventState == 'INSTANT_VOD';
+  bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
+  bool get isInstantVod {
+    if (eventState != 'INSTANT_VOD') return false;
+    final end = scheduledEnd ?? matchDate;
+    if (end == null) return true;
+    return DateTime.now().toUtc().difference(end.toUtc()) < const Duration(hours: 2);
+  }
   bool get isUpcoming {
     if (matchDate == null) return false;
     return matchDate!.isAfter(DateTime.now().toUtc());
@@ -57,6 +66,9 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<VideoItem> _videos = [];
+  List<VideoItem> _liveVideos = [];
+  Timer? _liveRefreshTimer;
+  Set<String> _cachedExtraIds = {};
   bool _isLoading = true;
   String? _errorMessage;
   String _genderFilter = 'all';
@@ -73,13 +85,18 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _spoilerRounds = {'Finale', 'Halbfinale', '3. Platz'};
   bool _isSpoiler(String round) => _spoilerFree && _spoilerRounds.contains(round);
 
+  List<VideoItem> get _allVideos {
+    final liveIds = _liveVideos.map((v) => v.id).toSet();
+    return [..._liveVideos, ..._videos.where((v) => !liveIds.contains(v.id))];
+  }
+
   List<String> get _availableCountries {
     final countries = <String>{};
     final source = _genderFilter == 'men'
-        ? _videos.where((v) => v.gender == 'Men')
+        ? _allVideos.where((v) => v.gender == 'Men')
         : _genderFilter == 'women'
-            ? _videos.where((v) => v.gender == 'Women')
-            : _videos;
+            ? _allVideos.where((v) => v.gender == 'Women')
+            : _allVideos;
     for (final v in source) {
       for (final m in RegExp(r'\(([A-Z]{2,3})\)').allMatches(v.teams)) {
         countries.add(m.group(1)!);
@@ -91,10 +108,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> get _availablePlayers {
     final players = <String>{};
     final source = _genderFilter == 'men'
-        ? _videos.where((v) => v.gender == 'Men')
+        ? _allVideos.where((v) => v.gender == 'Men')
         : _genderFilter == 'women'
-            ? _videos.where((v) => v.gender == 'Women')
-            : _videos;
+            ? _allVideos.where((v) => v.gender == 'Women')
+            : _allVideos;
     for (final v in source) {
       final teamParts = v.teams.split(RegExp(r'\s+v(?:s)?\s+'));
       for (final team in teamParts) {
@@ -109,7 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<VideoItem> get _filteredVideos {
-    var videos = _videos;
+    var videos = _allVideos;
     if (_genderFilter == 'men') videos = videos.where((v) => v.gender == 'Men').toList();
     if (_genderFilter == 'women') videos = videos.where((v) => v.gender == 'Women').toList();
     if (_playerFilter != null) {
@@ -136,15 +153,184 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadSettings();
     _loadTournamentList();
+    _loadLiveAndUpcoming();
+    // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
+    });
+    Future.delayed(const Duration(seconds: 12), () {
+      if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
+    });
+    _liveRefreshTimer = Timer.periodic(const Duration(seconds: 60), (_) => _loadLiveAndUpcoming());
+    if (Platform.isAndroid) {
+      Future.delayed(const Duration(seconds: 10), _checkForUpdateOnce);
+    }
+  }
+
+  Future<void> _checkForUpdateOnce() async {
+    final info = await UpdateChecker.checkOncePerSession();
+    if (info != null && mounted) _showUpdateDialog(info);
+  }
+
+  void _showUpdateDialog(UpdateInfo info) {
+    double? progress;
+    String? error;
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          title: Row(children: [
+            const Icon(Icons.system_update, color: Colors.orange, size: 20),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Update v${info.versionName}',
+                style: const TextStyle(color: Colors.white, fontSize: 16))),
+          ]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (info.changelog.isNotEmpty) ...[
+                Text(info.changelog,
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    maxLines: 6, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 12),
+              ],
+              if (progress != null) ...[
+                LinearProgressIndicator(
+                    value: progress, color: Colors.orange, backgroundColor: Colors.white12),
+                const SizedBox(height: 6),
+                Text('${(progress! * 100).toInt()}% heruntergeladen…',
+                    style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              ],
+              if (error != null)
+                Text(error!, style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
+            ],
+          ),
+          actions: progress == null
+              ? [
+                  TextButton(
+                    autofocus: true,
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Später', style: TextStyle(color: Colors.white54)),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      setDialog(() { progress = 0.0; error = null; });
+                      await UpdateChecker.downloadAndInstall(
+                        info.downloadUrl,
+                        info.versionName,
+                        onProgress: (p) { if (ctx.mounted) setDialog(() => progress = p); },
+                        onError: (e) { if (ctx.mounted) setDialog(() { progress = null; error = 'Fehler: $e'; }); },
+                      );
+                    },
+                    child: const Text('Jetzt installieren', style: TextStyle(color: Colors.orange)),
+                  ),
+                ]
+              : const [],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _liveRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadSettings() async {
     final th = await _storage.read(key: 'two_hour_mode');
     final sf = await _storage.read(key: 'spoiler_free');
-    if (mounted) setState(() {
-      _twoHourMode = th != 'false'; // default true wenn noch nicht gespeichert
-      _spoilerFree = sf != 'false'; // default true wenn noch nicht gespeichert
-    });
+    final ids = await _storage.read(key: 'live_playlist_ids');
+    if (ids != null && ids.isNotEmpty) {
+      _cachedExtraIds = ids.split(',').where((s) => s.isNotEmpty).toSet();
+    }
+    if (mounted) {
+      setState(() {
+        _twoHourMode = th != 'false';
+        _spoilerFree = sf != 'false';
+      });
+    }
+  }
+
+  Future<void> _checkLiveInIds(Set<String> ids) async {
+    if (ids.isEmpty) return;
+    final ctx = _buildCtx();
+    final liveItems = <VideoItem>[];
+    await Future.wait(ids.map((id) async {
+      try {
+        final res = await http.get(
+          Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id?overrideFeedType=moreinfo&ctx=$ctx'),
+          headers: {'Origin': 'https://tv.volleyballworld.com'},
+        );
+        if (res.statusCode != 200) return;
+        final data = jsonDecode(res.body);
+        final entries = data['entry'] as List? ?? [];
+        for (final entry in entries) {
+          final state = entry['extensions']?['event_state'] as String? ?? '';
+          final tags = (entry['extensions']?['tags'] as String? ?? '').toLowerCase();
+          if ((state == 'LIVE' || state == 'LIVE_PUBLISHED') && tags.contains('beach')) {
+            liveItems.add(_itemFromJson(entry));
+          }
+        }
+      } catch (_) {}
+    }));
+    if (mounted && liveItems.isNotEmpty) setState(() => _liveVideos = liveItems);
+  }
+
+  Future<void> _loadLiveAndUpcoming() async {
+    // Sofort mit gecachten IDs prüfen (kein Warten auf Discovery)
+    if (_cachedExtraIds.isNotEmpty) {
+      _checkLiveInIds(_cachedExtraIds); // fire-and-forget
+    }
+
+    // Phase 1: Playlist-IDs discovern (parallel, im Hintergrund)
+    try {
+      const cgIds = ['aBT42rPR', 'rkwGm18m'];
+      final knownIds = <String>{};
+      final freshIds = <String>{};
+
+      await Future.wait([
+        for (final cgId in cgIds) ...[
+          http.get(
+            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$cgId'),
+            headers: {'Origin': 'https://tv.volleyballworld.com'},
+          ).then((res) {
+            if (res.statusCode != 200) return;
+            final cgData = jsonDecode(res.body);
+            final ps = cgData['entry']?[0]?['extensions']?['playlists'] as String? ?? '';
+            for (final id in ps.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty)) {
+              knownIds.add(id);
+            }
+          }).catchError((_) {}),
+          http.get(Uri.parse('https://tv.volleyballworld.com/competition-groups/$cgId'))
+            .then((res) {
+              if (res.statusCode != 200) return;
+              final pattern = RegExp(r'data-testid="power-cell-([A-Za-z0-9]{8})-');
+              for (final m in pattern.allMatches(res.body)) {
+                freshIds.add(m.group(1)!);
+              }
+            }).catchError((_) {}),
+        ],
+      ]);
+      freshIds.removeAll(knownIds);
+
+      if (freshIds.isNotEmpty) {
+        // Cache persistieren wenn neue IDs gefunden
+        if (!freshIds.containsAll(_cachedExtraIds) || !_cachedExtraIds.containsAll(freshIds)) {
+          _cachedExtraIds = Set.from(freshIds);
+          _storage.write(key: 'live_playlist_ids', value: freshIds.join(','));
+        } else {
+          _cachedExtraIds = Set.from(freshIds);
+        }
+        // Phase 2 mit frischen IDs – nur wenn Cache leer war (sonst lief _checkLiveInIds schon)
+        if (_liveVideos.isEmpty) await _checkLiveInIds(freshIds);
+      } else if (_cachedExtraIds.isEmpty) {
+        // Phase 1 erfolglos und kein Cache – nichts zu tun
+      }
+    } catch (_) {}
   }
 
   void _showSettings() {
@@ -167,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(color: Colors.white38, fontSize: 12),
                 ),
                 value: _twoHourMode,
-                activeColor: Colors.orange,
+                activeThumbColor: Colors.orange,
                 onChanged: (val) {
                   setDialog(() {});
                   setState(() => _twoHourMode = val);
@@ -184,7 +370,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(color: Colors.white38, fontSize: 12),
                 ),
                 value: _spoilerFree,
-                activeColor: Colors.orange,
+                activeThumbColor: Colors.orange,
                 onChanged: (val) {
                   setDialog(() {});
                   setState(() => _spoilerFree = val);
@@ -561,6 +747,7 @@ class _HomeScreenState extends State<HomeScreen> {
         playerUrl: playerUrl,
         useRealDuration: !_twoHourMode,
         seekToLive: seekToLive,
+        isLive: video.isLive,
       ),
     ));
   }
@@ -635,13 +822,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: const Text('BALD', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
       );
     }
-    if (video.isInstantVod) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(color: const Color(0xFF2E7D32), borderRadius: BorderRadius.circular(3)),
-        child: const Text('NEU', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
-      );
-    }
+
     return const SizedBox.shrink();
   }
 
@@ -1031,7 +1212,7 @@ class _TvFocusWrapper extends StatefulWidget {
   final Widget child;
   final double borderRadius;
 
-  const _TvFocusWrapper({required this.child, this.borderRadius = 8});
+  const _TvFocusWrapper({required this.child, required this.borderRadius});
 
   @override
   State<_TvFocusWrapper> createState() => _TvFocusWrapperState();
@@ -1164,10 +1345,12 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
       });
     });
     _searchFocus.addListener(() {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _searchFocused = _searchFocus.hasFocus;
         if (!_searchFocus.hasFocus) _searchActive = false;
       });
+      }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _firstFocus.requestFocus();
@@ -1196,10 +1379,12 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Focus(
             onFocusChange: (hasFocus) {
-              if (mounted) setState(() {
+              if (mounted) {
+                setState(() {
                 _searchFocused = hasFocus;
                 if (!hasFocus && !_searchFocus.hasFocus) _searchActive = false;
               });
+              }
             },
             onKeyEvent: (_, event) {
               if (!_searchActive && event is KeyDownEvent &&
@@ -1316,16 +1501,40 @@ class WebViewPlayerScreen extends StatefulWidget {
   final String playerUrl;
   final bool useRealDuration;
   final bool seekToLive;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false});
+  final bool isLive;
+  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
 
   @override
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
 }
 
 class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
-  late final WebViewController _controller;
+  WebViewController? _controller;
+  InAppWebViewController? _inAppController;
+
+  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
+
+  void _runJs(String js) {
+    if (_useInAppWebView) {
+      _inAppController?.evaluateJavascript(source: js);
+    } else {
+      _controller?.runJavaScript(js);
+    }
+  }
+
+  void _loadUrl(String url) {
+    if (_useInAppWebView) {
+      _inAppController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    } else {
+      _controller?.loadRequest(Uri.parse(url));
+    }
+  }
 
   Duration get _effectiveDuration {
+    if (widget.isLive) {
+      // Live: max = aktuelle Live-Kante (seekable.end), kein künstliches Limit
+      return _liveEdge > 0 ? Duration(seconds: _liveEdge.floor()) : Duration(seconds: _realDuration.floor());
+    }
     if (widget.useRealDuration || _realDuration > 7200) {
       return Duration(seconds: _realDuration.floor());
     }
@@ -1333,11 +1542,13 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
   Duration _fakePosition = Duration.zero;
   double _realDuration = 7200; // Default 2h bis JW Player echte Dauer meldet
+  double _liveEdge = 0; // Für Live-Streams: aktuellster abspielbarer Zeitpunkt
   bool _isPlaying = false;
   bool _isInBlackScreen = false;
   bool _showControls = true;
   bool _playerReady = false;
   bool _isTV = false;
+  String _debugMsg = '';
 
   @override
   void didChangeDependencies() {
@@ -1371,7 +1582,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       setState(() => _showControls = true);
       _startHideControlsTimer();
       if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
-          event.logicalKey == LogicalKeyboardKey.arrowDown) return true;
+          event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        return true;
+      }
     }
 
     switch (event.logicalKey) {
@@ -1404,13 +1617,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
 
+    if (!_useInAppWebView) {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (_) {
-          _controller.runJavaScript(r'''
+          _runJs(r'''
             (function() {
               if (window._qualityPatched) return;
               window._qualityPatched = true;
@@ -1504,12 +1718,13 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ));
 
     // Android: Autoplay VOR loadRequest setzen damit kein Race Condition entsteht
-    if (_controller.platform is AndroidWebViewController) {
-      (_controller.platform as AndroidWebViewController)
+    if (_controller!.platform is AndroidWebViewController) {
+      (_controller!.platform as AndroidWebViewController)
           .setMediaPlaybackRequiresUserGesture(false);
     }
 
-    _controller.loadRequest(Uri.parse(widget.playerUrl));
+    _loadUrl(widget.playerUrl);
+    } // end if (!_useInAppWebView)
   }
 
   // Findet das <video>-Element im Hauptframe oder in iframes
@@ -1529,14 +1744,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _positionTimer?.cancel();
     _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (_isInBlackScreen) return;
-      _controller.runJavaScript('''
+      _runJs('''
         try {
           var v = $_jsGetVideo;
           if (v) {
+            var seekEnd = (v.seekable && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (isFinite(v.duration) ? v.duration : 0);
             FlutterChannel.postMessage(JSON.stringify({
               type: 'time',
               pos: v.currentTime,
-              dur: v.duration || 0,
+              dur: isFinite(v.duration) ? v.duration : seekEnd,
+              seekEnd: seekEnd,
               state: (window._flutterPaused || v.paused) ? 'paused' : 'playing'
             }));
           }
@@ -1546,7 +1763,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
 
   void _onPageFinished() {
-    _controller.runJavaScript('''
+    _runJs('''
       window._flutterPaused = false;
 
       // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
@@ -1723,6 +1940,56 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                     }
                   }
                 } catch(e) {}
+                ''' : widget.isLive ? '''
+                var _seekDone = false;
+                var _seekAttempts = 0;
+                function _dbg(m) { try { FlutterChannel.postMessage(JSON.stringify({type:'debug',msg:m})); } catch(e) {} }
+                function _doSeekToStart() {
+                  try {
+                    var v = $_jsGetVideo;
+                    if (!v) { _dbg('NO VIDEO ELEMENT (attempt '+_seekAttempts+')'); return false; }
+                    var sk = v.seekable;
+                    if (!sk || sk.length === 0) { _dbg('seekable empty cur='+v.currentTime.toFixed(1)); return false; }
+                    var s = sk.start(0);
+                    var e = sk.end(0);
+                    _dbg('seekable '+s.toFixed(1)+' -> '+e.toFixed(1)+' cur='+v.currentTime.toFixed(1)+' range='+(e-s).toFixed(1));
+                    if (e - s > 10) {
+                      v.currentTime = s;
+                      _dbg('SEEKED to '+s.toFixed(1));
+                      setTimeout(function() {
+                        try {
+                          var v2 = $_jsGetVideo;
+                          if (!v2) return;
+                          var s2 = (v2.seekable && v2.seekable.length > 0) ? v2.seekable.start(0) : s;
+                          var e2 = (v2.seekable && v2.seekable.length > 0) ? v2.seekable.end(0) : e;
+                          _dbg('2s after seek: cur='+v2.currentTime.toFixed(1)+' start='+s2.toFixed(1));
+                          if (e2 - s2 > 10 && (v2.currentTime - s2) > (e2 - s2) * 0.5) {
+                            v2.currentTime = s2;
+                            _dbg('RE-SEEK to '+s2.toFixed(1));
+                          }
+                        } catch(err2) {}
+                      }, 2000);
+                      return true;
+                    }
+                    _dbg('range too small: '+(e-s).toFixed(1));
+                  } catch(e) { _dbg('ERR: '+e); }
+                  return false;
+                }
+                p.on('firstFrame', function() {
+                  _dbg('firstFrame fired');
+                  if (!_seekDone) setTimeout(function() {
+                    if (!_seekDone && _doSeekToStart()) _seekDone = true;
+                  }, 500);
+                });
+                var _seekInterval = setInterval(function() {
+                  _seekAttempts++;
+                  if (_seekDone) { clearInterval(_seekInterval); return; }
+                  if (_doSeekToStart()) {
+                    _seekDone = true;
+                    clearInterval(_seekInterval);
+                  }
+                  if (_seekAttempts > 60) clearInterval(_seekInterval);
+                }, 500);
                 ''' : ''}
               }, 600);
             });
@@ -1791,7 +2058,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
             _startHideControlsTimer();
             final safeTitle = widget.title.replaceAll("'", "\\'");
-            _controller.runJavaScript("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
+            _runJs("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
           }
         });
       } else if (type == 'play') {
@@ -1806,7 +2073,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           setState(() {
             _fakePosition = Duration(milliseconds: ((data['pos'] ?? 0.0) * 1000).toInt());
             _realDuration = (data['dur'] ?? _realDuration).toDouble();
-            // State-Sync nur wenn kein User-Toggle in den letzten 1,5s
+            if (widget.isLive && data['seekEnd'] != null) {
+              final se = (data['seekEnd'] as num).toDouble();
+              if (se > 0) _liveEdge = se;
+            }
             if (sinceToggle.inMilliseconds > 1500) {
               final state = data['state'] as String?;
               if (state != null) _isPlaying = state == 'playing';
@@ -1816,11 +2086,19 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       } else if (type == 'key') {
         _handleJsKey(data['key'] as String? ?? '');
       } else if (type == 'complete') {
-        if (widget.useRealDuration || _realDuration > 7200) {
+        if (widget.isLive) {
+          // Live-Stream endet nie künstlich
+        } else if (widget.useRealDuration || _realDuration > 7200) {
           setState(() => _isPlaying = false);
         } else {
           _startBlackScreen();
         }
+      } else if (type == 'debug') {
+        final msg = data['msg'] as String? ?? '';
+        setState(() => _debugMsg = msg);
+        Future.delayed(const Duration(seconds: 8), () {
+          if (mounted) setState(() => _debugMsg = '');
+        });
       }
     } catch (_) {}
   }
@@ -1850,14 +2128,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
     if (targetSecs <= real) {
       setState(() { _isInBlackScreen = false; _fakePosition = target; _isPlaying = wasPlaying; });
-      _controller.runJavaScript('try { var v=$_jsGetVideo; if(v) v.currentTime=$targetSecs; } catch(e) {}');
+      _runJs('try { var v=$_jsGetVideo; if(v) v.currentTime=$targetSecs; } catch(e) {}');
       if (wasPlaying) {
-        _controller.runJavaScript('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
+        _runJs('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
       } else {
-        _controller.runJavaScript('if(window.flutterPause) window.flutterPause();');
+        _runJs('if(window.flutterPause) window.flutterPause();');
       }
     } else {
-      _controller.runJavaScript('try { var v=$_jsGetVideo; if(v) v.pause(); } catch(e) {}');
+      _runJs('try { var v=$_jsGetVideo; if(v) v.pause(); } catch(e) {}');
       setState(() { _isInBlackScreen = true; _fakePosition = target; _isPlaying = wasPlaying; });
       if (wasPlaying) {
         _blackScreenTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
@@ -1881,9 +2159,9 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     });
     if (!_isInBlackScreen) {
       if (nowPlaying) {
-        _controller.runJavaScript('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
+        _runJs('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
       } else {
-        _controller.runJavaScript('if(window.flutterPause) window.flutterPause();');
+        _runJs('if(window.flutterPause) window.flutterPause();');
       }
     }
     _startHideControlsTimer();
@@ -1910,7 +2188,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     if (next == _playbackRate) return;
     setState(() => _playbackRate = next);
     if (!_isInBlackScreen) {
-      _controller.runJavaScript('try { var v=$_jsGetVideo; if(v) v.playbackRate=$next; } catch(e) {}');
+      _runJs('try { var v=$_jsGetVideo; if(v) v.playbackRate=$next; } catch(e) {}');
     }
     _startHideControlsTimer();
   }
@@ -1934,7 +2212,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       _showControls = true;
       _seekOverlayText = seekText;
     });
-    _controller.runJavaScript("if(window.flShowSeek) window.flShowSeek('$seekText');");
+    _runJs("if(window.flShowSeek) window.flShowSeek('$seekText');");
     _seekTimer = Timer(const Duration(milliseconds: 600), () {
       final target = isForward
           ? _fakePosition + Duration(seconds: _pendingSeekSeconds)
@@ -1959,13 +2237,12 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
-  @override
   void _closePlayer() {
-    _controller.runJavaScript(
+    _runJs(
       'try{jwplayer().stop();}catch(e){}'
       'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
     );
-    _controller.loadRequest(Uri.parse('about:blank'));
+    _loadUrl('about:blank');
     if (mounted) Navigator.pop(context);
   }
 
@@ -1977,11 +2254,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _positionTimer?.cancel();
     _blackScreenTimer?.cancel();
     try {
-      _controller.runJavaScript(
+      _runJs(
         'try{jwplayer().stop();}catch(e){}'
         'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
       );
-      _controller.loadRequest(Uri.parse('about:blank'));
+      _loadUrl('about:blank');
     } catch (_) {}
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([]);
@@ -2028,6 +2305,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             Positioned.fill(child: Container(
               color: Colors.black,
               child: const Center(child: CircularProgressIndicator(color: Colors.orange)),
+            )),
+
+          // Debug-Overlay
+          if (_debugMsg.isNotEmpty)
+            Positioned(top: 20, left: 10, right: 10, child: Container(
+              color: Colors.black87,
+              padding: const EdgeInsets.all(8),
+              child: Text(_debugMsg, style: const TextStyle(color: Colors.yellow, fontSize: 11), maxLines: 5),
             )),
 
           // Vollflächige Touch-Overlay: links=zurück, rechts=vor
@@ -2080,10 +2365,52 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
 
   Widget _buildWebViewWidget() {
-    if (_controller.platform is AndroidWebViewController) {
+    if (_useInAppWebView) {
+      return InAppWebView(
+        initialUrlRequest: URLRequest(url: WebUri(widget.playerUrl)),
+        initialUserScripts: UnmodifiableListView([
+          UserScript(
+            source: '''
+              window.FlutterChannel = {
+                postMessage: function(msg) {
+                  try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
+                }
+              };
+            ''',
+            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          ),
+        ]),
+        initialSettings: InAppWebViewSettings(
+          mediaPlaybackRequiresUserGesture: false,
+          allowsInlineMediaPlayback: true,
+          javaScriptEnabled: true,
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ),
+        onWebViewCreated: (controller) {
+          _inAppController = controller;
+          controller.addJavaScriptHandler(
+            handlerName: 'FlutterChannel',
+            callback: (args) {
+              if (args.isNotEmpty) _onJsMessage(JavaScriptMessage(message: args[0].toString()));
+            },
+          );
+        },
+        onLoadStop: (controller, url) {
+          _onPageFinished();
+          Future.delayed(const Duration(seconds: 4), () {
+            if (mounted && !_playerReady) {
+              setState(() { _playerReady = true; _isPlaying = true; });
+              _startHideControlsTimer();
+              _startPositionPolling();
+            }
+          });
+        },
+      );
+    }
+    if (_controller!.platform is AndroidWebViewController) {
       return WebViewWidget.fromPlatformCreationParams(
         params: AndroidWebViewWidgetCreationParams(
-          controller: _controller.platform as AndroidWebViewController,
+          controller: _controller!.platform as AndroidWebViewController,
           displayWithHybridComposition: true,
           gestureRecognizers: {
             Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
@@ -2092,11 +2419,30 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       );
     }
     return WebViewWidget(
-      controller: _controller,
+      controller: _controller!,
       gestureRecognizers: {
         Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
       },
     );
+  }
+
+  Widget _buildLiveTimeDisplay() {
+    final edge = _liveEdge > 0 ? _liveEdge : _realDuration;
+    final pos = _fakePosition.inSeconds.toDouble();
+    final behind = (edge - pos).clamp(0.0, double.infinity);
+    final isAtLive = behind < 15;
+    if (isAtLive) {
+      return Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)),
+          child: const Text('● LIVE', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+        ),
+      ]);
+    }
+    if (_liveEdge <= 0) return const SizedBox.shrink();
+    return Text('−${_formatDuration(Duration(seconds: behind.toInt()))} hinter Live',
+        style: const TextStyle(color: Colors.white70, fontSize: 13));
   }
 
   Widget _buildControls() {
@@ -2142,7 +2488,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               ),
             ),
             Row(children: [
-              Text('${_formatDuration(_fakePosition)} / ${_formatDuration(_effectiveDuration)}',
+              if (widget.isLive) _buildLiveTimeDisplay()
+              else Text('${_formatDuration(_fakePosition)} / ${_formatDuration(_effectiveDuration)}',
                   style: const TextStyle(color: Colors.white70, fontSize: 13)),
               const Spacer(),
               if (!_isTV) ...[

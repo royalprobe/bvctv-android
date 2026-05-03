@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C c:/Users/Simon/BVCTV remote -v)",
+      "Bash(git -C c:/Users/Simon/BVCTV ls-remote origin HEAD)",
+      "Bash(git remote *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

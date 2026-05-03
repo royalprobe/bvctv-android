@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Speichern unter:  app/src/main/res/xml/file_provider_paths.xml
+
+  external-files-path entspricht Context.getExternalFilesDir(null)
+  → typischer Pfad: /sdcard/Android/data/<package>/files/
+  Der Sub-Pfad "Download/" ergibt getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+-->
+<paths>
+    <external-files-path
+        name="apk_download"
+        path="Download/" />
+</paths>

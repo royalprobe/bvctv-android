@@ -1,0 +1,36 @@
+<!--
+  Einfügen in AndroidManifest.xml
+  ══════════════════════════════════════════════════════════════════
+-->
+
+<!-- ── Permissions (außerhalb von <application>) ── -->
+
+<uses-permission android:name="android.permission.INTERNET" />
+
+<!-- APK-Installation aus unbekannten Quellen (Android 8+) -->
+<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+<!-- Schreiben auf externen Speicher – nur für Android 9 und älter nötig.
+     getExternalFilesDir() benötigt auf Android 10+ KEINE Schreib-Permission. -->
+<uses-permission
+    android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+    android:maxSdkVersion="28" />
+
+
+<!-- ── FileProvider (innerhalb von <application>) ── -->
+
+<provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.fileprovider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/file_provider_paths" />
+</provider>
+
+
+<!--
+  Außerdem benötigt:  res/xml/file_provider_paths.xml
+  (Inhalt liegt in file_provider_paths.xml dieser Sammlung)
+-->
