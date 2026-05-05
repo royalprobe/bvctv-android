@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 
 class VideoItem {
@@ -28,6 +29,7 @@ class VideoItem {
   final DateTime? matchDate;
   final String eventState;
   final DateTime? scheduledEnd;
+  final String? linkUrl;
 
   const VideoItem({
     required this.id,
@@ -41,8 +43,10 @@ class VideoItem {
     this.matchDate,
     this.eventState = 'VOD_PUBLIC',
     this.scheduledEnd,
+    this.linkUrl,
   });
 
+  bool get isYouTube => linkUrl != null;
   bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
   bool get isInstantVod {
     if (eventState != 'INSTANT_VOD') return false;
@@ -68,7 +72,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<VideoItem> _videos = [];
   List<VideoItem> _liveVideos = [];
   Timer? _liveRefreshTimer;
-  Set<String> _cachedExtraIds = {};
+  Timer? _videoRefreshTimer;
+  Timer? _preloadFocusTimer;
+  WebViewController? _preloadController;
+  String? _preloadedVideoId;
   bool _isLoading = true;
   String? _errorMessage;
   String _genderFilter = 'all';
@@ -81,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _spoilerFree = true;
 
   final _storage = const FlutterSecureStorage();
+  String _appVersion = '';
 
   static const _spoilerRounds = {'Finale', 'Halbfinale', '3. Platz'};
   bool _isSpoiler(String round) => _spoilerFree && _spoilerRounds.contains(round);
@@ -162,7 +170,11 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
     });
     _liveRefreshTimer = Timer.periodic(const Duration(seconds: 60), (_) => _loadLiveAndUpcoming());
+    _videoRefreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (!_isLoading) _loadVideos(null, true);
+    });
     if (Platform.isAndroid) {
+      PackageInfo.fromPlatform().then((i) { if (mounted) setState(() => _appVersion = i.version); });
       Future.delayed(const Duration(seconds: 10), _checkForUpdateOnce);
     }
   }
@@ -234,19 +246,35 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _startPreload(VideoItem video) {
+    if (_preloadedVideoId == video.id) return;
+    _preloadFocusTimer?.cancel();
+    _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      final selfLink = Uri.encodeComponent(
+        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+      );
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
+      final ctrl = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+        ..loadRequest(Uri.parse(playerUrl));
+      setState(() { _preloadController = ctrl; _preloadedVideoId = video.id; });
+    });
+  }
+
   @override
   void dispose() {
     _liveRefreshTimer?.cancel();
+    _videoRefreshTimer?.cancel();
+    _preloadFocusTimer?.cancel();
+    try { _preloadController?.loadRequest(Uri.parse('about:blank')); } catch (_) {}
     super.dispose();
   }
 
   Future<void> _loadSettings() async {
     final th = await _storage.read(key: 'two_hour_mode');
     final sf = await _storage.read(key: 'spoiler_free');
-    final ids = await _storage.read(key: 'live_playlist_ids');
-    if (ids != null && ids.isNotEmpty) {
-      _cachedExtraIds = ids.split(',').where((s) => s.isNotEmpty).toSet();
-    }
     if (mounted) {
       setState(() {
         _twoHourMode = th != 'false';
@@ -255,91 +283,66 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _checkLiveInIds(Set<String> ids) async {
-    if (ids.isEmpty) return;
+  Future<void> _loadLiveAndUpcoming() async {
+    // 1. Live-Events aus aktuell geladenem View sofort zeigen (kein Netzwerk nötig)
+    final liveInView = _videos.where((v) => v.isLive).toList();
+    if (liveInView.isNotEmpty && mounted) {
+      setState(() => _liveVideos = liveInView);
+    }
+
+    // 2. Nur das neueste Turnier auf Live-Events prüfen (API-Reihenfolge: neueste zuerst)
+    final toCheck = _availableTournaments
+        .where((t) => !t['id']!.startsWith('__'))
+        .take(1)
+        .map((t) => t['id']!)
+        .toSet();
+
+    if (toCheck.isEmpty) return; // Turnierliste noch nicht geladen → nächste Retry
+
     final ctx = _buildCtx();
     final liveItems = <VideoItem>[];
-    await Future.wait(ids.map((id) async {
+    final seen = <String>{};
+    int successCount = 0;
+
+    await Future.wait(toCheck.map((id) async {
       try {
         final res = await http.get(
           Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id?overrideFeedType=moreinfo&ctx=$ctx'),
           headers: {'Origin': 'https://tv.volleyballworld.com'},
-        );
+        ).timeout(const Duration(seconds: 10));
         if (res.statusCode != 200) return;
+        successCount++;
         final data = jsonDecode(res.body);
         final entries = data['entry'] as List? ?? [];
         for (final entry in entries) {
           final state = entry['extensions']?['event_state'] as String? ?? '';
-          final tags = (entry['extensions']?['tags'] as String? ?? '').toLowerCase();
-          if ((state == 'LIVE' || state == 'LIVE_PUBLISHED') && tags.contains('beach')) {
-            liveItems.add(_itemFromJson(entry));
+          if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
+            final item = _itemFromJson(entry);
+            if (seen.add(item.id)) liveItems.add(item);
           }
         }
       } catch (_) {}
     }));
-    if (mounted && liveItems.isNotEmpty) setState(() => _liveVideos = liveItems);
-  }
 
-  Future<void> _loadLiveAndUpcoming() async {
-    // Sofort mit gecachten IDs prüfen (kein Warten auf Discovery)
-    if (_cachedExtraIds.isNotEmpty) {
-      _checkLiveInIds(_cachedExtraIds); // fire-and-forget
+    if (!mounted) return;
+    if (liveItems.isNotEmpty) {
+      setState(() => _liveVideos = liveItems);
+    } else if (successCount > 0 && liveInView.isEmpty) {
+      // API confirmed no live games and current view also has none → clear
+      setState(() => _liveVideos = []);
     }
-
-    // Phase 1: Playlist-IDs discovern (parallel, im Hintergrund)
-    try {
-      const cgIds = ['aBT42rPR', 'rkwGm18m'];
-      final knownIds = <String>{};
-      final freshIds = <String>{};
-
-      await Future.wait([
-        for (final cgId in cgIds) ...[
-          http.get(
-            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$cgId'),
-            headers: {'Origin': 'https://tv.volleyballworld.com'},
-          ).then((res) {
-            if (res.statusCode != 200) return;
-            final cgData = jsonDecode(res.body);
-            final ps = cgData['entry']?[0]?['extensions']?['playlists'] as String? ?? '';
-            for (final id in ps.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty)) {
-              knownIds.add(id);
-            }
-          }).catchError((_) {}),
-          http.get(Uri.parse('https://tv.volleyballworld.com/competition-groups/$cgId'))
-            .then((res) {
-              if (res.statusCode != 200) return;
-              final pattern = RegExp(r'data-testid="power-cell-([A-Za-z0-9]{8})-');
-              for (final m in pattern.allMatches(res.body)) {
-                freshIds.add(m.group(1)!);
-              }
-            }).catchError((_) {}),
-        ],
-      ]);
-      freshIds.removeAll(knownIds);
-
-      if (freshIds.isNotEmpty) {
-        // Cache persistieren wenn neue IDs gefunden
-        if (!freshIds.containsAll(_cachedExtraIds) || !_cachedExtraIds.containsAll(freshIds)) {
-          _cachedExtraIds = Set.from(freshIds);
-          _storage.write(key: 'live_playlist_ids', value: freshIds.join(','));
-        } else {
-          _cachedExtraIds = Set.from(freshIds);
-        }
-        // Phase 2 mit frischen IDs – nur wenn Cache leer war (sonst lief _checkLiveInIds schon)
-        if (_liveVideos.isEmpty) await _checkLiveInIds(freshIds);
-      } else if (_cachedExtraIds.isEmpty) {
-        // Phase 1 erfolglos und kein Cache – nichts zu tun
-      }
-    } catch (_) {}
+    // If network failed (successCount == 0), keep existing _liveVideos intact
   }
 
   void _showSettings() {
+    String? updateMsg;
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialog) => AlertDialog(
           backgroundColor: const Color(0xFF1A1A1A),
           title: const Text('Einstellungen', style: TextStyle(color: Colors.white)),
+          contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -377,40 +380,89 @@ class _HomeScreenState extends State<HomeScreen> {
                   _storage.write(key: 'spoiler_free', value: val.toString());
                 },
               ),
+              const Divider(color: Colors.white12, height: 24),
+              Row(children: [
+                _TvFocusButton(
+                  autofocus: true,
+                  borderRadius: 6,
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        backgroundColor: const Color(0xFF1A1A1A),
+                        title: const Text('Abmelden?', style: TextStyle(color: Colors.white)),
+                        content: const Text('Du wirst ausgeloggt und musst dich erneut anmelden.',
+                            style: TextStyle(color: Colors.white70)),
+                        actions: [
+                          TextButton(autofocus: true, onPressed: () => Navigator.pop(c, false),
+                              child: const Text('Abbrechen', style: TextStyle(color: Colors.white54))),
+                          TextButton(onPressed: () => Navigator.pop(c, true),
+                              child: const Text('Abmelden', style: TextStyle(color: Colors.redAccent))),
+                        ],
+                      ),
+                    );
+                    if (confirm == true && mounted) {
+                      await _storage.delete(key: 'access_token');
+                      if (mounted) {
+                        Navigator.pushReplacement(context,
+                            MaterialPageRoute(builder: (_) => const LoginScreen()));
+                      }
+                    }
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    child: Text('Abmelden', style: TextStyle(color: Colors.redAccent)),
+                  ),
+                ),
+                const Spacer(),
+                _TvFocusButton(
+                  borderRadius: 6,
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    child: Text('Fertig', style: TextStyle(color: Colors.orange)),
+                  ),
+                ),
+              ]),
+              if (_appVersion.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('v$_appVersion',
+                        style: const TextStyle(color: Colors.white24, fontSize: 11)),
+                    _TvFocusButton(
+                      borderRadius: 6,
+                      onPressed: () async {
+                        setDialog(() => updateMsg = null);
+                        UpdateChecker.resetSession();
+                        final info = await UpdateChecker.check();
+                        if (!ctx.mounted || !mounted) return;
+                        if (info != null) {
+                          Navigator.pop(ctx);
+                          _showUpdateDialog(info);
+                        } else {
+                          setDialog(() => updateMsg = 'Bereits die neueste Version.');
+                        }
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: Text(
+                          updateMsg ?? 'Auf Updates prüfen',
+                          style: TextStyle(
+                            color: updateMsg != null ? Colors.green.shade300 : Colors.white38,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(ctx);
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (c) => AlertDialog(
-                    backgroundColor: const Color(0xFF1A1A1A),
-                    title: const Text('Abmelden?', style: TextStyle(color: Colors.white)),
-                    content: const Text('Du wirst ausgeloggt und musst dich erneut anmelden.',
-                        style: TextStyle(color: Colors.white70)),
-                    actions: [
-                      TextButton(autofocus: true, onPressed: () => Navigator.pop(c, false),
-                          child: const Text('Abbrechen', style: TextStyle(color: Colors.white54))),
-                      TextButton(onPressed: () => Navigator.pop(c, true),
-                          child: const Text('Abmelden', style: TextStyle(color: Colors.redAccent))),
-                    ],
-                  ),
-                );
-                if (confirm == true && context.mounted) {
-                  await _storage.delete(key: 'access_token');
-                  Navigator.pushReplacement(context,
-                      MaterialPageRoute(builder: (_) => const LoginScreen()));
-                }
-              },
-              child: const Text('Abmelden', style: TextStyle(color: Colors.redAccent)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Fertig', style: TextStyle(color: Colors.orange)),
-            ),
-          ],
+          actions: const [],
         ),
       ),
     );
@@ -511,13 +563,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return end > 0 ? rest.substring(0, end).trim() : rest;
   }
 
-  String _extractPlaylistTitle(String body) {
-    try {
-      final m = RegExp(r'"title":"((?:[^"\\]|\\.)*)"').firstMatch(body);
-      if (m != null) return jsonDecode('"${m.group(1)}"') as String;
-    } catch (_) {}
-    return '';
-  }
 
   String _shortTitle(String title) {
     final i = title.indexOf(' I ');
@@ -529,59 +574,103 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadTournamentList() async {
     try {
-      // Playlist-IDs aus allen Competition Groups sammeln
+      // Beide Competition Groups PARALLEL fetchen (war vorher sequential)
       final cgPlaylistIds = <String>[];
-      for (final cgId in ['aBT42rPR', 'rkwGm18m']) {
+      await Future.wait(['aBT42rPR', 'rkwGm18m'].map((cgId) async {
         try {
           final cgRes = await http.get(
             Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$cgId'),
             headers: {'Origin': 'https://tv.volleyballworld.com'},
-          );
-          if (cgRes.statusCode != 200) continue;
+          ).timeout(const Duration(seconds: 8));
+          if (cgRes.statusCode != 200) return;
           final cgData = jsonDecode(cgRes.body);
           final ps = cgData['entry']?[0]?['extensions']?['playlists'] as String? ?? '';
-          final ids = ps.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty);
-          cgPlaylistIds.addAll(ids);
+          cgPlaylistIds.addAll(ps.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty));
         } catch (_) {}
+      }));
+
+      // Virtuelle Turniere immer anhängen
+      final virtualEntries = _virtualTournamentData
+          .map((vt) => {'id': vt['id'] as String, 'title': vt['title'] as String})
+          .toList();
+
+      if (cgPlaylistIds.isEmpty) {
+        // Kein API-Ergebnis → sofort virtuelle Turniere zeigen
+        if (mounted) {
+          setState(() {
+            _availableTournaments = virtualEntries;
+            _currentPlaylistId = virtualEntries.first['id']!;
+          });
+          _loadVideos(virtualEntries.first['id']!);
+        }
+        return;
       }
 
-      Future<Map<String, String>?> fetchPlaylist(String id, {required bool strict}) async {
+      // Erste Playlist SOFORT laden, ohne auf Titel aller anderen zu warten
+      final firstId = cgPlaylistIds.first;
+      if (mounted) {
+        setState(() {
+          _availableTournaments = [{'id': firstId, 'title': '…'}, ...virtualEntries];
+          _currentPlaylistId = firstId;
+        });
+        _loadVideos(firstId);
+      }
+
+      // Titel + pubdate des neuesten Videos holen – erste 1024 Bytes reichen fast immer
+      Future<Map<String, String>?> fetchTitle(String id) async {
         try {
-          final res = await http.get(
-            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id?overrideFeedType=moreinfo'),
-            headers: {'Origin': 'https://tv.volleyballworld.com'},
-          );
-          if (res.statusCode != 200) return null;
-          final data = jsonDecode(res.body);
-          final entries = data['entry'] as List? ?? [];
-          if (strict && entries.length < 5) return null; // Container-Playlists überspringen
-          if (!strict && entries.isEmpty) return null;
-          final title = _extractPlaylistTitle(res.body);
-          return {'id': id, 'title': title.isNotEmpty ? title : id};
+          final client = http.Client();
+          final req = http.Request('GET',
+              Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id'));
+          req.headers['Origin'] = 'https://tv.volleyballworld.com';
+          final streamed = await client.send(req).timeout(const Duration(seconds: 8));
+          if (streamed.statusCode != 200) { client.close(); return null; }
+          final buf = StringBuffer();
+          await for (final chunk in streamed.stream) {
+            buf.write(utf8.decode(chunk, allowMalformed: true));
+            if (buf.length >= 1024) break;
+          }
+          client.close();
+          final raw = buf.toString();
+          final m = RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(raw);
+          if (m == null) return null;
+          final title = jsonDecode('"${m.group(1)}"') as String;
+          if (title.isEmpty) return null;
+          final pm = RegExp(r'"pubdate"\s*:\s*(\d+)').firstMatch(raw);
+          return {'id': id, 'title': title, if (pm != null) 'pubdate': pm.group(1)!};
         } catch (_) {
           return null;
         }
       }
 
-      final futures = cgPlaylistIds.map((id) => fetchPlaylist(id, strict: true));
-
-      final results = (await Future.wait(futures))
+      final results = (await Future.wait(cgPlaylistIds.map(fetchTitle)))
           .whereType<Map<String, String>>()
           .toList();
 
-      // Virtuelle Turniere (einzelne Media-IDs) anhängen
-      for (final vt in _virtualTournamentData) {
-        results.add({'id': vt['id'] as String, 'title': vt['title'] as String});
+      // Sortierung: pubdate des neuesten Videos (descending), Fallback: Jahr im Titel
+      int titleYear(String t) {
+        final m = RegExp(r'\b(20\d{2})\b').firstMatch(t);
+        return m != null ? int.parse(m.group(1)!) : 0;
       }
+      results.sort((a, b) {
+        final pa = int.tryParse(a['pubdate'] ?? '') ?? 0;
+        final pb = int.tryParse(b['pubdate'] ?? '') ?? 0;
+        if (pa != 0 && pb != 0) return pb.compareTo(pa);
+        if (pa != 0) return -1;
+        if (pb != 0) return 1;
+        return titleYear(b['title']!).compareTo(titleYear(a['title']!));
+      });
 
-      final firstId = results.isNotEmpty ? results.first['id']! : _currentPlaylistId;
+      results.addAll(virtualEntries);
 
       if (mounted) {
+        final newFirst = results.first['id']!;
+        final needsReload = newFirst != _currentPlaylistId;
         setState(() {
           _availableTournaments = results;
-          _currentPlaylistId = firstId;
+          _currentPlaylistId = newFirst;
         });
-        _loadVideos(firstId);
+        if (needsReload) _loadVideos(newFirst);
       }
     } catch (_) {} finally {
       if (mounted) setState(() => _isLoadingTournaments = false);
@@ -617,6 +706,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ?? item['extensions']?['scheduled_start'] as String?;
     final endStr = item['extensions']?['scheduled_end'] as String?;
     final eventState = item['extensions']?['event_state'] as String? ?? 'VOD_PUBLIC';
+    final contentType = item['extensions']?['contentType'] as String?;
+    final rawLink = item['extensions']?['linkUrl'] as String?;
+    final linkUrl = contentType == 'link' ? rawLink : null;
     return VideoItem(
       id: item['id'] ?? '',
       title: title,
@@ -629,6 +721,7 @@ class _HomeScreenState extends State<HomeScreen> {
       matchDate: dateStr != null ? DateTime.tryParse(dateStr) : null,
       eventState: eventState,
       scheduledEnd: endStr != null ? DateTime.tryParse(endStr) : null,
+      linkUrl: linkUrl,
     );
   }
 
@@ -640,7 +733,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final res = await http.get(
           Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$mid?ctx=$ctx'),
           headers: {'Origin': 'https://tv.volleyballworld.com'},
-        );
+        ).timeout(const Duration(seconds: 8));
         if (res.statusCode == 200) {
           final data = jsonDecode(res.body);
           final entries = data['entry'] as List? ?? [];
@@ -652,10 +745,10 @@ class _HomeScreenState extends State<HomeScreen> {
     return (await Future.wait(futures)).whereType<VideoItem>().toList();
   }
 
-  Future<void> _loadVideos([String? playlistId]) async {
+  Future<void> _loadVideos([String? playlistId, bool silent = false]) async {
     final pid = playlistId ?? _currentPlaylistId;
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
-    setState(() { _isLoading = true; _errorMessage = null; });
+    if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
       // Virtuelles Turnier (einzelne Media-IDs)
       if (pid.startsWith('__') && pid != _allId) {
@@ -682,7 +775,7 @@ class _HomeScreenState extends State<HomeScreen> {
             final res = await http.get(
               Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/${t['id']}?overrideFeedType=moreinfo&ctx=$ctx'),
               headers: {'Origin': 'https://tv.volleyballworld.com'},
-            );
+            ).timeout(const Duration(seconds: 10));
             if (res.statusCode == 200) {
               final data = jsonDecode(res.body);
               return (data['entry'] as List? ?? []).map(_itemFromJson).toList();
@@ -708,7 +801,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await http.get(
         Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$pid?overrideFeedType=moreinfo&ctx=$ctx'),
         headers: {'Origin': 'https://tv.volleyballworld.com'},
-      );
+      ).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final videos = (data['entry'] as List? ?? []).map(_itemFromJson).toList()
@@ -722,13 +815,17 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => _errorMessage = 'Fehler ${response.statusCode}');
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Verbindungsfehler: $e');
+      if (!silent) setState(() => _errorMessage = 'Verbindungsfehler: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (!silent) setState(() => _isLoading = false);
     }
   }
 
   void _openVideo(VideoItem video) {
+    if (video.isYouTube) {
+      launchUrl(Uri.parse(video.linkUrl!), mode: LaunchMode.externalApplication);
+      return;
+    }
     if (video.isLive) {
       _showLiveDialog(video);
       return;
@@ -808,6 +905,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _statusBadge(VideoItem video) {
+    if (video.isYouTube) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFFCC0000), borderRadius: BorderRadius.circular(3)),
+        child: const Text('YT', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      );
+    }
     if (video.isLive) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -994,44 +1098,65 @@ class _HomeScreenState extends State<HomeScreen> {
     return _TvFocusButton(
       onPressed: () => _openVideo(video),
       borderRadius: 8,
+      onFocusChanged: (video.isYouTube || video.isLive || video.isUpcoming || !Platform.isAndroid)
+          ? null
+          : (focused) { if (focused) _startPreload(video); },
       child: Container(
         decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
         padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                _genderBadge(video.gender),
-                if (video.gender.isNotEmpty) const SizedBox(width: 6),
-                Expanded(child: Text(video.round,
-                  style: const TextStyle(color: Colors.white60, fontSize: 10),
-                  overflow: TextOverflow.ellipsis)),
-                _statusBadge(video),
-              ]),
-              const SizedBox(height: 6),
-              if (spoiler)
-                Row(children: [
-                  const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
-                  const SizedBox(width: 4),
-                  const Expanded(child: Text('Spoiler-Schutz aktiv',
-                    style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
-                ])
-              else
-                Text(video.teams,
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-            ]),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(video.tournament,
-                style: const TextStyle(color: Colors.white38, fontSize: 10),
-                overflow: TextOverflow.ellipsis),
-              Text(_formatDate(video.matchDate),
-                style: const TextStyle(color: Colors.white38, fontSize: 10)),
-            ]),
-          ],
-        ),
+        child: video.isYouTube
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    _statusBadge(video),
+                    const SizedBox(width: 6),
+                    const Text('YouTube', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  ]),
+                  const SizedBox(height: 6),
+                  Expanded(child: Text(video.title,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    maxLines: 3, overflow: TextOverflow.ellipsis)),
+                  const Text('Öffnet YouTube-App',
+                    style: TextStyle(color: Colors.white38, fontSize: 10)),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      _genderBadge(video.gender),
+                      if (video.gender.isNotEmpty) const SizedBox(width: 6),
+                      Expanded(child: Text(video.round,
+                        style: const TextStyle(color: Colors.white60, fontSize: 10),
+                        overflow: TextOverflow.ellipsis)),
+                      _statusBadge(video),
+                    ]),
+                    const SizedBox(height: 6),
+                    if (spoiler)
+                      Row(children: [
+                        const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
+                        const SizedBox(width: 4),
+                        const Expanded(child: Text('Spoiler-Schutz aktiv',
+                          style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
+                      ])
+                    else
+                      Text(video.teams,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ]),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(video.tournament,
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                      overflow: TextOverflow.ellipsis),
+                    Text(_formatDate(video.matchDate),
+                      style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                  ]),
+                ],
+              ),
       ),
     );
   }
@@ -1047,19 +1172,37 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF1A1A1A),
             title: const Text('App beenden?', style: TextStyle(color: Colors.white)),
-            content: const Text('Willst du die App wirklich schließen?',
-                style: TextStyle(color: Colors.white70)),
-            actions: [
-              TextButton(
-                autofocus: true,
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Abbrechen', style: TextStyle(color: Colors.white54)),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Beenden', style: TextStyle(color: Colors.orange)),
-              ),
-            ],
+            contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Willst du die App wirklich schließen?',
+                    style: TextStyle(color: Colors.white70)),
+                const SizedBox(height: 16),
+                Row(children: [
+                  _TvFocusButton(
+                    autofocus: true,
+                    borderRadius: 6,
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text('Abbrechen', style: TextStyle(color: Colors.white54)),
+                    ),
+                  ),
+                  const Spacer(),
+                  _TvFocusButton(
+                    borderRadius: 6,
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text('Beenden', style: TextStyle(color: Colors.orange)),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+            actions: const [],
           ),
         );
         if (close == true && context.mounted) SystemNavigator.pop();
@@ -1073,7 +1216,8 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(icon: const Icon(Icons.settings), onPressed: _showSettings),
         ],
       ),
-      body: _errorMessage != null && _videos.isEmpty
+      body: Stack(children: [
+        _errorMessage != null && _videos.isEmpty
           ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               Text(_errorMessage!, style: const TextStyle(color: Colors.redAccent)),
               const SizedBox(height: 16),
@@ -1148,6 +1292,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           }),
                   ),
                 ]),
+        if (_preloadController != null)
+          Positioned(
+            left: 0, top: 0,
+            width: 1, height: 1,
+            child: WebViewWidget(controller: _preloadController!),
+          ),
+      ]),
       ),
     );
   }
@@ -1158,12 +1309,14 @@ class _TvFocusButton extends StatefulWidget {
   final VoidCallback onPressed;
   final double borderRadius;
   final bool autofocus;
+  final void Function(bool)? onFocusChanged;
 
   const _TvFocusButton({
     required this.child,
     required this.onPressed,
     this.borderRadius = 8,
     this.autofocus = false,
+    this.onFocusChanged,
   });
 
   @override
@@ -1177,7 +1330,7 @@ class _TvFocusButtonState extends State<_TvFocusButton> {
   Widget build(BuildContext context) {
     return Focus(
       autofocus: widget.autofocus,
-      onFocusChange: (f) => setState(() => _focused = f),
+      onFocusChange: (f) { setState(() => _focused = f); widget.onFocusChanged?.call(f); },
       onKeyEvent: (_, event) {
         if (event is KeyDownEvent &&
             (event.logicalKey == LogicalKeyboardKey.select ||
@@ -1198,7 +1351,7 @@ class _TvFocusButtonState extends State<_TvFocusButton> {
               width: 3,
             ),
             boxShadow: _focused
-                ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.6), blurRadius: 10, spreadRadius: 1)]
+                ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.2), blurRadius: 6, spreadRadius: 0)]
                 : null,
           ),
           child: widget.child,
@@ -1706,8 +1859,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         },
         onPageFinished: (_) {
           _onPageFinished();
-          // Fallback: nur wenn ready-Event nie kommt
-          Future.delayed(const Duration(seconds: 4), () {
+          // Fallback: nur wenn ready-Event und play-Event nie kommen
+          Future.delayed(const Duration(seconds: 2), () {
             if (mounted && !_playerReady) {
               setState(() { _playerReady = true; _isPlaying = true; });
               _startHideControlsTimer();
@@ -1825,7 +1978,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           var v = $_jsGetVideo;
           if (v) { _flutterSetupVideo(v); v.play(); clearInterval(autoPlay); }
         } catch(e) {}
-      }, 500);
+      }, 100);
 
 
       // Hebt <video> über alle JW Player UI-Elemente (Titel, Controlbar, Overlays)
@@ -1991,8 +2144,15 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                   if (_seekAttempts > 60) clearInterval(_seekInterval);
                 }, 500);
                 ''' : ''}
-              }, 600);
+              }, 0);
             });
+            // Race condition fix: player might already be past 'idle' when we register
+            try {
+              var st = p.getState();
+              if (st && st !== 'idle' && st !== 'error') {
+                FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+              }
+            } catch(e) {}
             p.on('levels', function() { _forceMaxQuality(p); });
             p.on('play',  function() {
               if (!window._flutterPaused) FlutterChannel.postMessage(JSON.stringify({type:'play'}));
@@ -2004,7 +2164,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           }
         } catch(e) {}
         if (attempts > 60) clearInterval(init);
-      }, 500);
+      }, 100);
 
       // TV-Fernbedienung: D-Pad-Tasten über FlutterChannel weiterleiten
       document.addEventListener('keydown', function(e) {
@@ -2053,16 +2213,21 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       if (type == 'ready') {
         final dur = (data['dur'] ?? 0).toDouble();
         _startPositionPolling();
-        Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted) {
-            setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
-            _startHideControlsTimer();
-            final safeTitle = widget.title.replaceAll("'", "\\'");
-            _runJs("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
-          }
-        });
+        if (mounted) {
+          setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
+          _startHideControlsTimer();
+          final safeTitle = widget.title.replaceAll("'", "\\'");
+          _runJs("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
+        }
       } else if (type == 'play') {
-        setState(() => _isPlaying = true);
+        if (!_playerReady) {
+          // 'ready' might have been missed — unlock controls on first play
+          _startPositionPolling();
+          setState(() { _playerReady = true; _isPlaying = true; });
+          _startHideControlsTimer();
+        } else {
+          setState(() => _isPlaying = true);
+        }
       } else if (type == 'pause') {
         setState(() => _isPlaying = false);
       } else if (type == 'time') {
@@ -2135,7 +2300,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         _runJs('if(window.flutterPause) window.flutterPause();');
       }
     } else {
-      _runJs('try { var v=$_jsGetVideo; if(v) v.pause(); } catch(e) {}');
+      _runJs('if(window.flutterPause) window.flutterPause();');
       setState(() { _isInBlackScreen = true; _fakePosition = target; _isPlaying = wasPlaying; });
       if (wasPlaying) {
         _blackScreenTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {

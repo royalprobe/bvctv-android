@@ -4,7 +4,16 @@
       "Bash(git -C c:/Users/Simon/BVCTV remote -v)",
       "Bash(git -C c:/Users/Simon/BVCTV ls-remote origin HEAD)",
       "Bash(git remote *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(C:/Users/Simon/AppData/Local/Android/Sdk/platform-tools/adb.exe -s 192.168.0.54:5555 install -r \"c:/Users/Simon/BVCTV/build/app/outputs/flutter-apk/app-release.apk\")",
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\" devices)",
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\" -s a3d8f2a6 install -r \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\")",
+      "Bash(python3 -c ' *)",
+      "PowerShell(python -m playwright install chromium 2>&1)",
+      "PowerShell(tail -3)",
+      "PowerShell(python -m playwright install chromium)",
+      "PowerShell(python c:\\\\Users\\\\Simon\\\\BVCTV\\\\check_playlists.py)"
     ]
   }
 }

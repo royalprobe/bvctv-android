@@ -82,7 +82,7 @@ def adb_install():
     print(f"📡  Verbinde mit Fire Stick ({FIRESTICK_IP}) …")
     subprocess.run([adb, "connect", FIRESTICK_IP], check=False, capture_output=True)
     print("📲  Installiere APK …")
-    result = subprocess.run([adb, "install", "-r", str(APK_PATH)], check=False)
+    result = subprocess.run([adb, "-s", FIRESTICK_IP, "install", "-r", str(APK_PATH)], check=False)
     if result.returncode != 0:
         print("⚠️   ADB-Install fehlgeschlagen (Fire Stick erreichbar?)")
     else:
@@ -126,6 +126,21 @@ def github_release(token, username, repo_name, version_name, changelog):
     print(f"✅  GitHub Release fertig:\n   {release.html_url}")
 
 
+# ── Git ───────────────────────────────────────────────────────────────────────
+
+def git_tag(version_name: str, message: str):
+    tag = f"v{version_name}"
+    print(f"🏷️   Git-Commit + Tag {tag} …")
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-m", f"Release {tag}: {message}"], check=False)
+    subprocess.run(["git", "tag", "-f", tag, "-m", tag], check=True)
+    result = subprocess.run(["git", "push", "--follow-tags"], check=False)
+    if result.returncode != 0:
+        subprocess.run(["git", "push"], check=False)
+        subprocess.run(["git", "push", "--tags"], check=False)
+    print(f"✅  Tag {tag} gepusht.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -158,17 +173,20 @@ def main():
 
     changelog = args.message or f"Release {version_name}"
 
-    # 2. Build
+    # 2. Git commit + tag
+    git_tag(version_name, changelog)
+
+    # 3. Build
     build_apk()
 
     apk_size_mb = APK_PATH.stat().st_size / 1_048_576
     print(f"📱  APK: {APK_PATH}  ({apk_size_mb:.1f} MB)")
 
-    # 3. GitHub Release
+    # 4. GitHub Release
     if not args.no_github:
         github_release(token, username, repo_name, version_name, changelog)
 
-    # 4. ADB Install
+    # 5. ADB Install
     if not args.no_adb:
         adb_install()
 
