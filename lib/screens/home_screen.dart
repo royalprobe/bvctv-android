@@ -78,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _preloadedVideoId;
   bool _isLoading = true;
   String? _errorMessage;
+  int _videosLoadEpoch = 0;
   String _genderFilter = 'all';
   String _currentPlaylistId = 'QN15YAsv';
   List<Map<String, String>> _availableTournaments = [];
@@ -672,7 +673,10 @@ class _HomeScreenState extends State<HomeScreen> {
           _availableTournaments = results;
           _currentPlaylistId = newFirst;
         });
-        if (needsReload) _loadVideos(newFirst);
+        if (needsReload) {
+          _videosLoadEpoch++;
+          _loadVideos(newFirst);
+        }
       }
     } catch (_) {} finally {
       if (mounted) setState(() => _isLoadingTournaments = false);
@@ -749,6 +753,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadVideos([String? playlistId, bool silent = false]) async {
     final pid = playlistId ?? _currentPlaylistId;
+    final epoch = _videosLoadEpoch;
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
     if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
@@ -812,14 +817,15 @@ class _HomeScreenState extends State<HomeScreen> {
             if (b.matchDate == null) return -1;
             return b.matchDate!.compareTo(a.matchDate!);
           });
+        if (_videosLoadEpoch != epoch) return;
         setState(() => _videos = videos);
       } else {
-        setState(() => _errorMessage = 'Fehler ${response.statusCode}');
+        if (_videosLoadEpoch == epoch) setState(() => _errorMessage = 'Fehler ${response.statusCode}');
       }
     } catch (e) {
-      if (!silent) setState(() => _errorMessage = 'Verbindungsfehler: $e');
+      if (!silent && _videosLoadEpoch == epoch) setState(() => _errorMessage = 'Verbindungsfehler: $e');
     } finally {
-      if (!silent) setState(() => _isLoading = false);
+      if (!silent && _videosLoadEpoch == epoch) setState(() => _isLoading = false);
     }
   }
 
