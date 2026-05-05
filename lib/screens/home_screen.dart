@@ -1102,70 +1102,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildVideoCard(VideoItem video) {
-    final spoiler = _isSpoiler(video.round);
-    return _TvFocusButton(
+    return _VideoCard(
+      video: video,
+      spoiler: _isSpoiler(video.round),
       onPressed: () => _openVideo(video),
-      borderRadius: 8,
-      onFocusChanged: (video.isYouTube || video.isLive || video.isUpcoming || !Platform.isAndroid)
+      onPreload: (video.isYouTube || video.isLive || video.isUpcoming || !Platform.isAndroid)
           ? null
-          : (focused) { if (focused) _startPreload(video); },
-      child: Container(
-        decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
-        padding: const EdgeInsets.all(10),
-        child: video.isYouTube
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(children: [
-                    _statusBadge(video),
-                    const SizedBox(width: 6),
-                    const Text('YouTube', style: TextStyle(color: Colors.white38, fontSize: 10)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Expanded(child: Text(video.title,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                    maxLines: 3, overflow: TextOverflow.ellipsis)),
-                  const Text('Öffnet YouTube-App',
-                    style: TextStyle(color: Colors.white38, fontSize: 10)),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      _genderBadge(video.gender),
-                      if (video.gender.isNotEmpty) const SizedBox(width: 6),
-                      Expanded(child: Text(video.round,
-                        style: const TextStyle(color: Colors.white60, fontSize: 10),
-                        overflow: TextOverflow.ellipsis)),
-                      _statusBadge(video),
-                    ]),
-                    const SizedBox(height: 6),
-                    if (spoiler)
-                      Row(children: [
-                        const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
-                        const SizedBox(width: 4),
-                        const Expanded(child: Text('Spoiler-Schutz aktiv',
-                          style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
-                      ])
-                    else
-                      Text(video.teams,
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ]),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(video.tournament,
-                      style: const TextStyle(color: Colors.white38, fontSize: 10),
-                      overflow: TextOverflow.ellipsis),
-                    Text(_formatDate(video.matchDate),
-                      style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                  ]),
-                ],
-              ),
-      ),
+          : () => _startPreload(video),
+      genderBadge: _genderBadge(video.gender),
+      statusBadge: _statusBadge(video),
+      dateStr: _formatDate(video.matchDate),
     );
   }
 
@@ -1311,6 +1257,171 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+// ── Marquee (scrollender Text bei Fokus) ─────────────────────────────────────
+
+class _MarqueeText extends StatefulWidget {
+  final String text;
+  final bool focused;
+  final TextStyle style;
+  const _MarqueeText({required this.text, required this.focused, required this.style});
+  @override
+  State<_MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<_MarqueeText> {
+  final _scroll = ScrollController();
+  Timer? _timer;
+
+  @override
+  void didUpdateWidget(_MarqueeText old) {
+    super.didUpdateWidget(old);
+    if (widget.focused && !old.focused) { _startScroll(); }
+    else if (!widget.focused && old.focused) { _resetScroll(); }
+  }
+
+  void _startScroll() {
+    _timer?.cancel();
+    _timer = Timer(const Duration(milliseconds: 600), () async {
+      if (!mounted || !_scroll.hasClients) return;
+      final max = _scroll.position.maxScrollExtent;
+      if (max <= 0) return;
+      await _scroll.animateTo(max,
+          duration: Duration(milliseconds: (max * 22).round()),
+          curve: Curves.linear);
+    });
+  }
+
+  void _resetScroll() {
+    _timer?.cancel();
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+        controller: _scroll,
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        child: Text(widget.text, style: widget.style, maxLines: 1),
+      );
+}
+
+// ── VideoCard ─────────────────────────────────────────────────────────────────
+
+class _VideoCard extends StatefulWidget {
+  final VideoItem video;
+  final bool spoiler;
+  final VoidCallback onPressed;
+  final VoidCallback? onPreload;
+  final Widget genderBadge;
+  final Widget statusBadge;
+  final String dateStr;
+  const _VideoCard({
+    required this.video,
+    required this.spoiler,
+    required this.onPressed,
+    required this.genderBadge,
+    required this.statusBadge,
+    required this.dateStr,
+    this.onPreload,
+  });
+  @override
+  State<_VideoCard> createState() => _VideoCardState();
+}
+
+class _VideoCardState extends State<_VideoCard> {
+  bool _focused = false;
+
+  static List<String> _splitTeams(String teams) {
+    final idx = teams.indexOf(' vs ');
+    if (idx < 0) return [teams];
+    return [teams.substring(0, idx).trim(), teams.substring(idx + 4).trim()];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final video = widget.video;
+    final teams = _splitTeams(video.teams);
+    const teamStyle = TextStyle(fontSize: 12, fontWeight: FontWeight.bold);
+
+    return _TvFocusButton(
+      onPressed: widget.onPressed,
+      borderRadius: 8,
+      onFocusChanged: (focused) {
+        setState(() => _focused = focused);
+        if (focused) widget.onPreload?.call();
+      },
+      child: Container(
+        decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.all(10),
+        child: video.isYouTube
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    widget.statusBadge,
+                    const SizedBox(width: 6),
+                    const Text('YouTube', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  ]),
+                  const SizedBox(height: 6),
+                  Expanded(child: Text(video.title,
+                    style: teamStyle, maxLines: 3, overflow: TextOverflow.ellipsis)),
+                  const Text('Öffnet YouTube-App',
+                    style: TextStyle(color: Colors.white38, fontSize: 10)),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      widget.genderBadge,
+                      if (video.gender.isNotEmpty) const SizedBox(width: 6),
+                      Expanded(child: Text(video.round,
+                        style: const TextStyle(color: Colors.white60, fontSize: 10),
+                        overflow: TextOverflow.ellipsis)),
+                      widget.statusBadge,
+                    ]),
+                    const SizedBox(height: 6),
+                    if (widget.spoiler)
+                      Row(children: [
+                        const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
+                        const SizedBox(width: 4),
+                        const Expanded(child: Text('Spoiler-Schutz aktiv',
+                          style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
+                      ])
+                    else ...[
+                      _MarqueeText(text: teams[0], focused: _focused, style: teamStyle),
+                      if (teams.length > 1) ...[
+                        const SizedBox(height: 2),
+                        _MarqueeText(text: teams[1], focused: _focused, style: teamStyle),
+                      ],
+                    ],
+                  ]),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(video.tournament,
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                      overflow: TextOverflow.ellipsis),
+                    Text(widget.dateStr,
+                      style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                  ]),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+// ── TvFocusButton ─────────────────────────────────────────────────────────────
 
 class _TvFocusButton extends StatefulWidget {
   final Widget child;
