@@ -134,9 +134,8 @@ def git_tag(version_name: str, message: str):
     subprocess.run(["git", "add", "-A"], check=True)
     subprocess.run(["git", "commit", "-m", f"Release {tag}: {message}"], check=False)
     subprocess.run(["git", "tag", "-f", tag, "-m", tag], check=True)
-    result = subprocess.run(["git", "push", "--follow-tags"], check=False)
+    result = subprocess.run(["git", "push", "--set-upstream", "origin", "main", "--follow-tags"], check=False)
     if result.returncode != 0:
-        subprocess.run(["git", "push"], check=False)
         subprocess.run(["git", "push", "--tags"], check=False)
     print(f"✅  Tag {tag} gepusht.")
 

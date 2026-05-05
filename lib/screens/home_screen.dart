@@ -616,7 +616,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadVideos(firstId);
       }
 
-      // Titel + pubdate des neuesten Videos holen – erste 1024 Bytes reichen fast immer
+      // Titel + match_date des neuesten Videos holen – 3072 Bytes reichen sicher
+      // (match_date liegt bei ~1900-2000 Bytes; TCP-Burst sendet ~14KB auf einmal,
+      //  daher keine Ladezeit-Erhöhung gegenüber 512 Bytes)
       Future<Map<String, String>?> fetchTitle(String id) async {
         try {
           final client = http.Client();
@@ -628,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final buf = StringBuffer();
           await for (final chunk in streamed.stream) {
             buf.write(utf8.decode(chunk, allowMalformed: true));
-            if (buf.length >= 1024) break;
+            if (buf.length >= 3072) break;
           }
           client.close();
           final raw = buf.toString();
@@ -636,8 +638,8 @@ class _HomeScreenState extends State<HomeScreen> {
           if (m == null) return null;
           final title = jsonDecode('"${m.group(1)}"') as String;
           if (title.isEmpty) return null;
-          final pm = RegExp(r'"pubdate"\s*:\s*(\d+)').firstMatch(raw);
-          return {'id': id, 'title': title, if (pm != null) 'pubdate': pm.group(1)!};
+          final dm = RegExp(r'"match_date"\s*:\s*"(\d{4}-\d{2}-\d{2})').firstMatch(raw);
+          return {'id': id, 'title': title, if (dm != null) 'matchDate': dm.group(1)!};
         } catch (_) {
           return null;
         }
@@ -647,17 +649,17 @@ class _HomeScreenState extends State<HomeScreen> {
           .whereType<Map<String, String>>()
           .toList();
 
-      // Sortierung: pubdate des neuesten Videos (descending), Fallback: Jahr im Titel
+      // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
       int titleYear(String t) {
         final m = RegExp(r'\b(20\d{2})\b').firstMatch(t);
         return m != null ? int.parse(m.group(1)!) : 0;
       }
       results.sort((a, b) {
-        final pa = int.tryParse(a['pubdate'] ?? '') ?? 0;
-        final pb = int.tryParse(b['pubdate'] ?? '') ?? 0;
-        if (pa != 0 && pb != 0) return pb.compareTo(pa);
-        if (pa != 0) return -1;
-        if (pb != 0) return 1;
+        final da = a['matchDate'] ?? '';
+        final db = b['matchDate'] ?? '';
+        if (da.isNotEmpty && db.isNotEmpty) return db.compareTo(da);
+        if (da.isNotEmpty) return -1;
+        if (db.isNotEmpty) return 1;
         return titleYear(b['title']!).compareTo(titleYear(a['title']!));
       });
 
