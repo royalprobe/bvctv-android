@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'dart:async';
+import '../l10n/strings.dart';
 
 class PlayerScreen extends StatefulWidget {
   final String title;
@@ -281,7 +282,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               ),
                             ),
                             Text(
-                              'Klick $_seekClickCount',
+                              S.tapCount(_seekClickCount),
                               style: const TextStyle(color: Colors.white54, fontSize: 14),
                             ),
                           ],

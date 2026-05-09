@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import '../l10n/strings.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -79,7 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (code == null) {
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Login abgebrochen.';
+        _errorMessage = S.loginCancelled;
       });
       return;
     }
@@ -110,10 +111,10 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       } else {
         setState(() =>
-            _errorMessage = 'Token-Fehler: ${tokenResponse.statusCode}');
+            _errorMessage = S.tokenError(tokenResponse.statusCode));
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Fehler: $e');
+      setState(() => _errorMessage = S.errorMsg(e.toString()));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -141,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       foregroundColor: Colors.black,
                     ),
                     icon: const Icon(Icons.refresh),
-                    label: const Text('Erneut versuchen'),
+                    label: Text(S.retryLogin),
                   ),
                 ],
               )
@@ -327,7 +328,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A1A1A),
         title: Text(
-          isEmail ? 'E-Mail-Adresse' : isPassword ? 'Passwort' : 'Eingabe',
+          isEmail ? S.emailAddress : isPassword ? S.password : S.input,
           style: const TextStyle(color: Colors.white),
         ),
         content: TextField(
@@ -352,7 +353,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Abbrechen', style: TextStyle(color: Colors.white54)),
+            child: Text(S.cancel, style: const TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             autofocus: false,
@@ -432,9 +433,9 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                     icon: const Icon(Icons.arrow_back, color: Colors.white70),
                     onPressed: () => Navigator.of(context).pop(null),
                   ),
-                  const Text(
-                    'BVCTV Anmeldung',
-                    style: TextStyle(color: Colors.white70, fontSize: 16),
+                  Text(
+                    S.loginTitle,
+                    style: const TextStyle(color: Colors.white70, fontSize: 16),
                   ),
                 ],
               ),

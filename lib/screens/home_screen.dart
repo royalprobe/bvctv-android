@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
+import '../l10n/app_language.dart';
+import '../l10n/strings.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'login_screen.dart';
 import 'package:http/http.dart' as http;
@@ -91,7 +93,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _storage = const FlutterSecureStorage();
   String _appVersion = '';
 
-  static const _spoilerRounds = {'Finale', 'Halbfinale', '3. Platz'};
+  static const _spoilerRounds = {'Final', 'Semifinal', '3rd Place'};
   bool _isSpoiler(String round) => _spoilerFree && _spoilerRounds.contains(round);
 
   List<VideoItem> get _allVideos {
@@ -214,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 LinearProgressIndicator(
                     value: progress, color: Colors.orange, backgroundColor: Colors.white12),
                 const SizedBox(height: 6),
-                Text('${(progress! * 100).toInt()}% heruntergeladen…',
+                Text(S.downloadProgress((progress! * 100).toInt()),
                     style: const TextStyle(color: Colors.white38, fontSize: 11)),
               ],
               if (error != null)
@@ -226,7 +228,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   TextButton(
                     autofocus: true,
                     onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Später', style: TextStyle(color: Colors.white54)),
+                    child: Text(S.later, style: const TextStyle(color: Colors.white54)),
                   ),
                   TextButton(
                     onPressed: () async {
@@ -235,10 +237,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         info.downloadUrl,
                         info.versionName,
                         onProgress: (p) { if (ctx.mounted) setDialog(() => progress = p); },
-                        onError: (e) { if (ctx.mounted) setDialog(() { progress = null; error = 'Fehler: $e'; }); },
+                        onError: (e) { if (ctx.mounted) setDialog(() { progress = null; error = S.errorMsg(e.toString()); }); },
                       );
                     },
-                    child: const Text('Jetzt installieren', style: TextStyle(color: Colors.orange)),
+                    child: Text(S.installNow, style: const TextStyle(color: Colors.orange)),
                   ),
                 ]
               : const [],
@@ -342,18 +344,16 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialog) => AlertDialog(
           backgroundColor: const Color(0xFF1A1A1A),
-          title: const Text('Einstellungen', style: TextStyle(color: Colors.white)),
+          title: Text(S.settings, style: const TextStyle(color: Colors.white)),
           contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('2-Stunden-Modus', style: TextStyle(color: Colors.white70)),
+                title: Text(S.twoHourMode, style: const TextStyle(color: Colors.white70)),
                 subtitle: Text(
-                  _twoHourMode
-                      ? 'Fortschrittsbalken geht bis 2h (für zeitversetzte Streams)'
-                      : 'Fortschrittsbalken endet mit dem Video',
+                  _twoHourMode ? S.twoHourModeOnDesc : S.twoHourModeOffDesc,
                   style: const TextStyle(color: Colors.white38, fontSize: 12),
                 ),
                 value: _twoHourMode,
@@ -366,11 +366,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Spoiler-Schutz', style: TextStyle(color: Colors.white70)),
+                title: Text(S.spoilerProtection, style: const TextStyle(color: Colors.white70)),
                 subtitle: Text(
-                  _spoilerFree
-                      ? 'Teamnamen in Halbfinale/Finale/Bronze verborgen'
-                      : 'Alle Teamnamen sichtbar',
+                  _spoilerFree ? S.spoilerOnDesc : S.spoilerOffDesc,
                   style: const TextStyle(color: Colors.white38, fontSize: 12),
                 ),
                 value: _spoilerFree,
@@ -379,6 +377,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   setDialog(() {});
                   setState(() => _spoilerFree = val);
                   _storage.write(key: 'spoiler_free', value: val.toString());
+                },
+              ),
+              const Divider(color: Colors.white12, height: 16),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(S.language, style: const TextStyle(color: Colors.white70)),
+                subtitle: Text(
+                  S.isEn ? S.languageEnglish : S.languageGerman,
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                ),
+                value: S.isEn,
+                activeThumbColor: Colors.orange,
+                onChanged: (val) {
+                  final newLang = val ? 'en' : 'de';
+                  appLanguage.value = newLang;
+                  _storage.write(key: 'language', value: newLang);
                 },
               ),
               const Divider(color: Colors.white12, height: 24),
@@ -392,14 +406,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       context: context,
                       builder: (c) => AlertDialog(
                         backgroundColor: const Color(0xFF1A1A1A),
-                        title: const Text('Abmelden?', style: TextStyle(color: Colors.white)),
-                        content: const Text('Du wirst ausgeloggt und musst dich erneut anmelden.',
-                            style: TextStyle(color: Colors.white70)),
+                        title: Text(S.logoutTitle, style: const TextStyle(color: Colors.white)),
+                        content: Text(S.logoutDesc, style: const TextStyle(color: Colors.white70)),
                         actions: [
                           TextButton(autofocus: true, onPressed: () => Navigator.pop(c, false),
-                              child: const Text('Abbrechen', style: TextStyle(color: Colors.white54))),
+                              child: Text(S.cancel, style: const TextStyle(color: Colors.white54))),
                           TextButton(onPressed: () => Navigator.pop(c, true),
-                              child: const Text('Abmelden', style: TextStyle(color: Colors.redAccent))),
+                              child: Text(S.logout, style: const TextStyle(color: Colors.redAccent))),
                         ],
                       ),
                     );
@@ -411,18 +424,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       }
                     }
                   },
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Text('Abmelden', style: TextStyle(color: Colors.redAccent)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    child: Text(S.logout, style: const TextStyle(color: Colors.redAccent)),
                   ),
                 ),
                 const Spacer(),
                 _TvFocusButton(
                   borderRadius: 6,
                   onPressed: () => Navigator.pop(ctx),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Text('Fertig', style: TextStyle(color: Colors.orange)),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    child: Text(S.done, style: const TextStyle(color: Colors.orange)),
                   ),
                 ),
               ]),
@@ -444,13 +457,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           Navigator.pop(ctx);
                           _showUpdateDialog(info);
                         } else {
-                          setDialog(() => updateMsg = 'Bereits die neueste Version.');
+                          setDialog(() => updateMsg = S.alreadyUpToDate);
                         }
                       },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                         child: Text(
-                          updateMsg ?? 'Auf Updates prüfen',
+                          updateMsg ?? S.checkForUpdates,
                           style: TextStyle(
                             color: updateMsg != null ? Colors.green.shade300 : Colors.white38,
                             fontSize: 11,
@@ -538,13 +551,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _translateRound(String raw) {
     final l = raw.toLowerCase();
-    if (l.contains('1st') || l.contains('gold')) return 'Finale';
-    if (l.contains('3rd') || l.contains('bronze')) return '3. Platz';
-    if (l.contains('semi')) return 'Halbfinale';   // vor 'final' prüfen!
-    if (l.contains('quarter')) return 'Viertelfinale'; // vor 'final' prüfen!
-    if (l.contains('final')) return 'Finale';
-    if (l.contains('round of 16')) return 'Achtelfinale';
-    if (l.contains('pool')) return 'Vorrunde';
+    if (l.contains('1st') || l.contains('gold')) return 'Final';
+    if (l.contains('3rd') || l.contains('bronze')) return '3rd Place';
+    if (l.contains('semi')) return 'Semifinal';
+    if (l.contains('quarter')) return 'Quarterfinal';
+    if (l.contains('final')) return 'Final';
+    if (l.contains('round of 16')) return 'Round of 16';
+    if (l.contains('pool')) return 'Pool Play';
     return raw;
   }
 
@@ -820,10 +833,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (_videosLoadEpoch != epoch) return;
         setState(() => _videos = videos);
       } else {
-        if (_videosLoadEpoch == epoch) setState(() => _errorMessage = 'Fehler ${response.statusCode}');
+        if (_videosLoadEpoch == epoch) setState(() => _errorMessage = S.httpError(response.statusCode));
       }
     } catch (e) {
-      if (!silent && _videosLoadEpoch == epoch) setState(() => _errorMessage = 'Verbindungsfehler: $e');
+      if (!silent && _videosLoadEpoch == epoch) setState(() => _errorMessage = S.connectionError(e.toString()));
     } finally {
       if (!silent && _videosLoadEpoch == epoch) setState(() => _isLoading = false);
     }
@@ -869,21 +882,18 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1)),
           ),
           const SizedBox(width: 10),
-          const Expanded(child: Text('Live-Spiel', style: TextStyle(color: Colors.white))),
+          Expanded(child: Text(S.liveGame, style: const TextStyle(color: Colors.white))),
         ]),
-        content: Text(
-          'Dieses Spiel läuft gerade live.\nMöchtest du von Anfang an schauen oder direkt einsteigen?',
-          style: const TextStyle(color: Colors.white70),
-        ),
+        content: Text(S.liveDialogText, style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () { Navigator.pop(ctx); _launchPlayer(video, seekToLive: false); },
-            child: const Text('Von Anfang an', style: TextStyle(color: Colors.white54)),
+            child: Text(S.fromStart, style: const TextStyle(color: Colors.white54)),
           ),
           TextButton(
             onPressed: () { Navigator.pop(ctx); _launchPlayer(video, seekToLive: true); },
-            child: const Text('Live einsteigen', style: TextStyle(color: Colors.orange)),
+            child: Text(S.joinLive, style: const TextStyle(color: Colors.orange)),
           ),
         ],
       ),
@@ -892,9 +902,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _formatDate(DateTime? date) {
     if (date == null) return '';
-    const months = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
     final d = date.toLocal();
-    return '${d.day}. ${months[d.month - 1]} ${d.year}, ${d.hour.toString().padLeft(2,'0')}:${d.minute.toString().padLeft(2,'0')}';
+    return '${d.day}. ${S.months[d.month - 1]} ${d.year}, ${d.hour.toString().padLeft(2,'0')}:${d.minute.toString().padLeft(2,'0')}';
   }
 
   Widget _genderBadge(String gender) {
@@ -906,7 +915,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(
-        gender == 'Men' ? 'Herren' : 'Damen',
+        S.genderLabel(gender),
         style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
       ),
     );
@@ -971,9 +980,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final isAll = _currentPlaylistId == _allId;
     final currentTitle = isAll
-        ? 'Alle Turniere'
+        ? S.allTournaments
         : _availableTournaments
-            .firstWhere((t) => t['id'] == _currentPlaylistId, orElse: () => {'title': 'Turnier'})['title']!;
+            .firstWhere((t) => t['id'] == _currentPlaylistId, orElse: () => {'title': S.tournament})['title']!;
 
     Future<void> open() async {
       final result = await showModalBottomSheet<String>(
@@ -1005,7 +1014,7 @@ class _HomeScreenState extends State<HomeScreen> {
             border: Border.all(color: Colors.orange),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Flexible(child: Text(isAll ? 'Alle' : _shortTitle(currentTitle),
+            Flexible(child: Text(isAll ? S.all : _shortTitle(currentTitle),
               style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
               overflow: TextOverflow.ellipsis,
             )),
@@ -1021,7 +1030,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final players = _availablePlayers;
     if (players.isEmpty) return const SizedBox.shrink();
     final active = _playerFilter != null;
-    final label = _playerFilter ?? 'Alle Spieler';
+    final label = _playerFilter ?? S.allPlayers;
     Future<void> open() async {
       final result = await showModalBottomSheet<String>(
         context: context,
@@ -1063,7 +1072,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final countries = _availableCountries;
     if (countries.isEmpty) return const SizedBox.shrink();
     final active = _countryFilter != null;
-    final label = _countryFilter ?? 'Alle Länder';
+    final label = _countryFilter ?? S.allCountries;
     Future<void> open() async {
       final result = await showModalBottomSheet<String>(
         context: context,
@@ -1125,32 +1134,31 @@ class _HomeScreenState extends State<HomeScreen> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF1A1A1A),
-            title: const Text('App beenden?', style: TextStyle(color: Colors.white)),
+            title: Text(S.exitAppTitle, style: const TextStyle(color: Colors.white)),
             contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Willst du die App wirklich schließen?',
-                    style: TextStyle(color: Colors.white70)),
+                Text(S.exitAppDesc, style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 16),
                 Row(children: [
                   _TvFocusButton(
                     autofocus: true,
                     borderRadius: 6,
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      child: Text('Abbrechen', style: TextStyle(color: Colors.white54)),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text(S.cancel, style: const TextStyle(color: Colors.white54)),
                     ),
                   ),
                   const Spacer(),
                   _TvFocusButton(
                     borderRadius: 6,
                     onPressed: () => Navigator.pop(ctx, true),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      child: Text('Beenden', style: TextStyle(color: Colors.orange)),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      child: Text(S.exit, style: const TextStyle(color: Colors.orange)),
                     ),
                   ),
                 ]),
@@ -1175,18 +1183,18 @@ class _HomeScreenState extends State<HomeScreen> {
           ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               Text(_errorMessage!, style: const TextStyle(color: Colors.redAccent)),
               const SizedBox(height: 16),
-              ElevatedButton(onPressed: _loadVideos, child: const Text('Nochmal versuchen')),
+              ElevatedButton(onPressed: _loadVideos, child: Text(S.tryAgain)),
             ]))
           : Column(children: [
                   Container(
                     color: const Color(0xFF0A0A0A),
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
                     child: Row(children: [
-                      _filterChip('Alle', 'all', autofocus: true),
+                      _filterChip(S.all, 'all', autofocus: true),
                       const SizedBox(width: 8),
-                      _filterChip('Herren', 'men'),
+                      _filterChip(S.men, 'men'),
                       const SizedBox(width: 8),
-                      _filterChip('Damen', 'women'),
+                      _filterChip(S.women, 'women'),
                       const Spacer(),
                       _tournamentDropdown(),
                     ]),
@@ -1374,8 +1382,8 @@ class _VideoCardState extends State<_VideoCard> {
                   const SizedBox(height: 6),
                   Expanded(child: Text(video.title,
                     style: teamStyle, maxLines: 3, overflow: TextOverflow.ellipsis)),
-                  const Text('Öffnet YouTube-App',
-                    style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  Text(S.opensYouTube,
+                    style: const TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               )
             : Column(
@@ -1386,7 +1394,7 @@ class _VideoCardState extends State<_VideoCard> {
                     Row(children: [
                       widget.genderBadge,
                       if (video.gender.isNotEmpty) const SizedBox(width: 6),
-                      Expanded(child: Text(video.round,
+                      Expanded(child: Text(S.localizeRound(video.round),
                         style: const TextStyle(color: Colors.white60, fontSize: 10),
                         overflow: TextOverflow.ellipsis)),
                       widget.statusBadge,
@@ -1396,8 +1404,8 @@ class _VideoCardState extends State<_VideoCard> {
                       Row(children: [
                         const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
                         const SizedBox(width: 4),
-                        const Expanded(child: Text('Spoiler-Schutz aktiv',
-                          style: TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
+                        Expanded(child: Text(S.spoilerActive,
+                          style: const TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
                       ])
                     else ...[
                       _MarqueeText(text: teams[0], focused: _focused, style: teamStyle),
@@ -1544,7 +1552,7 @@ class _TournamentSheetState extends State<_TournamentSheet> {
   @override
   Widget build(BuildContext context) {
     final items = [
-      {'id': widget.allId, 'title': 'Alle Turniere'},
+      {'id': widget.allId, 'title': S.allTournaments},
       ...widget.tournaments,
     ];
     return Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1678,7 +1686,7 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
             onTap: () { if (!_searchActive) setState(() => _searchActive = true); },
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: 'Spieler suchen...',
+              hintText: S.searchPlayers,
               hintStyle: const TextStyle(color: Colors.white38),
               prefixIcon: const Icon(Icons.search, color: Colors.white38),
               suffixIcon: _ctrl.text.isNotEmpty
@@ -1704,7 +1712,7 @@ class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
               focusNode: _firstFocus,
               leading: Icon(Icons.people, size: 20,
                   color: widget.selected == null ? Colors.orange : Colors.white38),
-              title: Text('Alle Spieler', style: TextStyle(
+              title: Text(S.allPlayers, style: TextStyle(
                 color: widget.selected == null ? Colors.orange : Colors.white70,
                 fontWeight: widget.selected == null ? FontWeight.bold : FontWeight.normal,
               )),
@@ -1746,7 +1754,7 @@ class _CountrySearchSheet extends StatelessWidget {
           ListTile(
             leading: Icon(Icons.flag_outlined, size: 20,
                 color: selected == null ? Colors.orange : Colors.white38),
-            title: Text('Alle Länder', style: TextStyle(
+            title: Text(S.allCountries, style: TextStyle(
               color: selected == null ? Colors.orange : Colors.white70,
               fontWeight: selected == null ? FontWeight.bold : FontWeight.normal,
             )),
@@ -2637,7 +2645,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               Icon(_seekClickCount >= 0 ? Icons.fast_forward : Icons.fast_rewind, color: Colors.orange, size: 48),
               const SizedBox(height: 8),
               Text(_seekOverlayText, style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-              Text('Klick $_seekClickCount', style: const TextStyle(color: Colors.white54, fontSize: 14)),
+              Text(S.tapCount(_seekClickCount.abs()), style: const TextStyle(color: Colors.white54, fontSize: 14)),
             ]),
           )),
 
@@ -2725,7 +2733,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ]);
     }
     if (_liveEdge <= 0) return const SizedBox.shrink();
-    return Text('−${_formatDuration(Duration(seconds: behind.toInt()))} hinter Live',
+    return Text('−${_formatDuration(Duration(seconds: behind.toInt()))} ${S.behindLive}',
         style: const TextStyle(color: Colors.white70, fontSize: 13));
   }
 
