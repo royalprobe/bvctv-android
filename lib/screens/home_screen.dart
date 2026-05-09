@@ -254,8 +254,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _preloadFocusTimer?.cancel();
     _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
       if (!mounted) return;
+      final ctx = _buildCtx();
       final selfLink = Uri.encodeComponent(
-        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
       );
       final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
       final ctrl = WebViewController()
@@ -897,8 +898,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _launchPlayer(VideoItem video, {required bool seekToLive}) {
+    final ctx = _buildCtx();
     final selfLink = Uri.encodeComponent(
-      'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+      'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
     );
     final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
     Navigator.push(context, MaterialPageRoute(
@@ -1945,6 +1947,15 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
+        onNavigationRequest: (NavigationRequest request) {
+          if (request.isMainFrame &&
+              !request.url.contains('tv.volleyballworld.com') &&
+              !request.url.startsWith('about:')) {
+            if (mounted) Navigator.pop(context);
+            return NavigationDecision.prevent;
+          }
+          return NavigationDecision.navigate;
+        },
         onPageStarted: (_) {
           _runJs(r'''
             (function() {

@@ -165,6 +165,7 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
+  String? _pendingCode;
   final GlobalKey _stackKey = GlobalKey();
 
   double _cursorX = 300;
@@ -465,15 +466,23 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         onLoadStop: (_, __) async {
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
+                          if (_pendingCode != null) {
+                            if (!mounted) return;
+                            final nav = Navigator.of(context);
+                            setState(() => _loading = true);
+                            final code = _pendingCode!;
+                            _pendingCode = null;
+                            await Future.delayed(const Duration(milliseconds: 800));
+                            if (mounted) nav.pop(code);
+                          }
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
                           if (url.startsWith(widget.redirectUri)) {
                             final code = Uri.parse(url).queryParameters['code'];
-                            // Nur poppen wenn ein code vorhanden ist — Zwischenschritte ignorieren
                             if (code != null && code.isNotEmpty) {
-                              if (mounted) Navigator.of(context).pop(code);
-                              return NavigationActionPolicy.CANCEL;
+                              _pendingCode = code;
+                              return NavigationActionPolicy.ALLOW;
                             }
                             return NavigationActionPolicy.ALLOW;
                           }
