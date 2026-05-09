@@ -380,20 +380,62 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
               const Divider(color: Colors.white12, height: 16),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(S.language, style: const TextStyle(color: Colors.white70)),
-                subtitle: Text(
-                  S.isEn ? S.languageEnglish : S.languageGerman,
-                  style: const TextStyle(color: Colors.white38, fontSize: 12),
-                ),
-                value: S.isEn,
-                activeThumbColor: Colors.orange,
-                onChanged: (val) {
-                  final newLang = val ? 'en' : 'de';
-                  appLanguage.value = newLang;
-                  _storage.write(key: 'language', value: newLang);
+              _TvFocusButton(
+                borderRadius: 6,
+                onPressed: () async {
+                  final result = await showDialog<String>(
+                    context: ctx,
+                    builder: (c) => AlertDialog(
+                      backgroundColor: const Color(0xFF1A1A1A),
+                      title: Text(S.language, style: const TextStyle(color: Colors.white)),
+                      contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ListTile(
+                            autofocus: S.isEn,
+                            title: Text('English', style: TextStyle(
+                              color: S.isEn ? Colors.orange : Colors.white70,
+                              fontWeight: S.isEn ? FontWeight.bold : FontWeight.normal,
+                            )),
+                            trailing: S.isEn ? const Icon(Icons.check, color: Colors.orange, size: 18) : null,
+                            onTap: () => Navigator.pop(c, 'en'),
+                          ),
+                          ListTile(
+                            autofocus: !S.isEn,
+                            title: Text('Deutsch', style: TextStyle(
+                              color: !S.isEn ? Colors.orange : Colors.white70,
+                              fontWeight: !S.isEn ? FontWeight.bold : FontWeight.normal,
+                            )),
+                            trailing: !S.isEn ? const Icon(Icons.check, color: Colors.orange, size: 18) : null,
+                            onTap: () => Navigator.pop(c, 'de'),
+                          ),
+                        ],
+                      ),
+                      actions: const [],
+                    ),
+                  );
+                  if (result != null) {
+                    appLanguage.value = result;
+                    _storage.write(key: 'language', value: result);
+                  }
                 },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(S.language, style: const TextStyle(color: Colors.white70)),
+                        Text(
+                          S.isEn ? S.languageEnglish : S.languageGerman,
+                          style: const TextStyle(color: Colors.white38, fontSize: 12),
+                        ),
+                      ],
+                    )),
+                    const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
+                  ]),
+                ),
               ),
               const Divider(color: Colors.white12, height: 24),
               Row(children: [
