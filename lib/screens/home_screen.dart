@@ -1947,15 +1947,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
-        onNavigationRequest: (NavigationRequest request) {
-          if (request.isMainFrame &&
-              !request.url.contains('tv.volleyballworld.com') &&
-              !request.url.startsWith('about:')) {
-            if (mounted) Navigator.pop(context);
-            return NavigationDecision.prevent;
-          }
-          return NavigationDecision.navigate;
-        },
         onPageStarted: (_) {
           _runJs(r'''
             (function() {
