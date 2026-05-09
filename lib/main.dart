@@ -11,7 +11,7 @@ void main() async {
     storage.read(key: 'access_token'),
     storage.read(key: 'language'),
   ]);
-  appLanguage.value = results[1] ?? 'de';
+  appLanguage.value = results[1] ?? 'en';
   runApp(BVCTVApp(initialToken: results[0]));
 }
 
