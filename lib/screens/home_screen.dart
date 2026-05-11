@@ -907,6 +907,7 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (_) => WebViewPlayerScreen(
         title: video.teams,
         playerUrl: playerUrl,
+        accessToken: widget.accessToken,
         useRealDuration: !_twoHourMode,
         seekToLive: seekToLive,
         isLive: video.isLive,
@@ -1823,10 +1824,11 @@ class _CountrySearchSheet extends StatelessWidget {
 class WebViewPlayerScreen extends StatefulWidget {
   final String title;
   final String playerUrl;
+  final String accessToken;
   final bool useRealDuration;
   final bool seekToLive;
   final bool isLive;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
+  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, required this.accessToken, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
 
   @override
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
@@ -1955,6 +1957,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               _isOnAuthPage = isAuth;
               if (!isAuth) _playerReady = false;
             });
+          }
+          // Access-Token in localStorage setzen bevor die Seite ihren Auth-Check macht
+          if (!isAuth) {
+            final token = widget.accessToken.replaceAll('"', '\\"');
+            _runJs('try{localStorage.setItem("quick-bricky-login-flow.access_token","$token");}catch(e){}');
           }
           _runJs(r'''
             (function() {
