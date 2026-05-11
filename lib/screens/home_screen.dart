@@ -5,6 +5,7 @@ import '../l10n/app_language.dart';
 import '../l10n/strings.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'login_screen.dart';
+import 'player_screen.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -255,7 +256,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
       if (!mounted) return;
       final ctx = _buildCtx();
-      final playerUrl = 'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx';
+      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
       final ctrl = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
@@ -528,6 +530,47 @@ class _HomeScreenState extends State<HomeScreen> {
       'platform': 'web',
     });
     return base64Url.encode(utf8.encode(payload));
+  }
+
+  String? _findVideoUrl(dynamic obj) {
+    if (obj is String) {
+      if ((obj.contains('.m3u8') || obj.contains('manifest')) && obj.startsWith('https')) return obj;
+      return null;
+    }
+    if (obj is Map) {
+      for (final key in ['file', 'url', 'src', 'link', 'stream', 'videoUrl']) {
+        final val = obj[key];
+        if (val is String && val.startsWith('https') && (val.contains('.m3u8') || val.contains('manifest'))) {
+          return val;
+        }
+      }
+      for (final val in obj.values) {
+        final found = _findVideoUrl(val);
+        if (found != null) return found;
+      }
+    }
+    if (obj is List) {
+      for (final item in obj) {
+        final found = _findVideoUrl(item);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  Future<String?> _fetchStreamUrl(String videoId) async {
+    try {
+      final ctx = _buildCtx();
+      final res = await http.get(
+        Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$videoId?ctx=$ctx'),
+        headers: {'Origin': 'https://tv.volleyballworld.com'},
+      ).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      return _findVideoUrl(data);
+    } catch (_) {
+      return null;
+    }
   }
 
   String _extractThumbnail(dynamic item) {
@@ -894,19 +937,30 @@ class _HomeScreenState extends State<HomeScreen> {
     _launchPlayer(video, seekToLive: false);
   }
 
-  void _launchPlayer(VideoItem video, {required bool seekToLive}) {
-    final ctx = _buildCtx();
-    final playerUrl = 'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx';
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => WebViewPlayerScreen(
-        title: video.teams,
-        playerUrl: playerUrl,
-        accessToken: widget.accessToken,
-        useRealDuration: !_twoHourMode,
-        seekToLive: seekToLive,
-        isLive: video.isLive,
-      ),
-    ));
+  void _launchPlayer(VideoItem video, {required bool seekToLive}) async {
+    final streamUrl = await _fetchStreamUrl(video.id);
+    if (!mounted) return;
+
+    if (streamUrl != null) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => PlayerScreen(title: video.teams, streamUrl: streamUrl),
+      ));
+    } else {
+      // Fallback: WebView mit tv.volleyballworld.com/player (funktioniert wo Session-Cookies gesetzt sind)
+      final ctx = _buildCtx();
+      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => WebViewPlayerScreen(
+          title: video.teams,
+          playerUrl: playerUrl,
+          accessToken: widget.accessToken,
+          useRealDuration: !_twoHourMode,
+          seekToLive: seekToLive,
+          isLive: video.isLive,
+        ),
+      ));
+    }
   }
 
   void _showLiveDialog(VideoItem video) {
