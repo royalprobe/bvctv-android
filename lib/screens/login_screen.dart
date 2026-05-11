@@ -420,6 +420,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isTV = MediaQuery.of(context).size.shortestSide > 450;
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -493,7 +494,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         const Center(
                           child: CircularProgressIndicator(color: Colors.orange),
                         ),
-                      Positioned(
+                      if (isTV) Positioned(
                         left: _cursorX,
                         top: _cursorY,
                         child: const IgnorePointer(child: _CursorWidget()),

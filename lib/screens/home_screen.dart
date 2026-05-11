@@ -1953,13 +1953,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               if (window._qualityPatched) return;
               window._qualityPatched = true;
 
-              try {
-                Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
-                Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
-                Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
-                Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
-                Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
-              } catch(e) {}
+              if (window.location.hostname === 'tv.volleyballworld.com' ||
+                  window.location.hostname.indexOf('zapp-5434') >= 0) {
+                try {
+                  Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
+                  Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
+                  Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
+                  Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
+                  Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
+                } catch(e) {}
+              }
 
               function _filterM3u8(t) {
                 if (t.indexOf('#EXT-X-STREAM-INF') < 0) return t;
@@ -2088,6 +2091,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   void _onPageFinished() {
     _runJs('''
+      (function(){
+      if(window.location.href.indexOf('volleyballworld.com')<0&&window.location.href.indexOf('zapp-5434')<0)return;
       window._flutterPaused = false;
 
       // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
@@ -2353,6 +2358,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           return false;
         }
       }, true);
+      })();
     ''');
   }
 
