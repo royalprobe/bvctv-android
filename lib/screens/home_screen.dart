@@ -565,10 +565,13 @@ class _HomeScreenState extends State<HomeScreen> {
         Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$videoId?ctx=$ctx'),
         headers: {'Origin': 'https://tv.volleyballworld.com'},
       ).timeout(const Duration(seconds: 10));
+      debugPrint('[BVCTV] media status=${res.statusCode} body100=${res.body.substring(0, res.body.length.clamp(0, 300))}');
       if (res.statusCode != 200) return null;
       final data = jsonDecode(res.body);
+      if (data is Map) debugPrint('[BVCTV] top-level keys: ${data.keys.toList()}');
       return _findVideoUrl(data);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[BVCTV] fetchStreamUrl error: $e');
       return null;
     }
   }
@@ -946,10 +949,10 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => PlayerScreen(title: video.teams, streamUrl: streamUrl),
       ));
     } else {
-      // Fallback: WebView mit tv.volleyballworld.com/player (funktioniert wo Session-Cookies gesetzt sind)
+      // Fallback: ctx direkt als Parameter an tv.volleyballworld.com/player
       final ctx = _buildCtx();
-      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
-      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
+      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}');
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&ctx=$ctx';
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => WebViewPlayerScreen(
           title: video.teams,
