@@ -421,7 +421,9 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   @override
   Widget build(BuildContext context) {
     final isTV = MediaQuery.of(context).size.shortestSide > 450;
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
@@ -507,6 +509,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 }
