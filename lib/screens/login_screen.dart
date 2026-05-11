@@ -166,6 +166,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
   String? _pendingCode;
+  bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
 
   double _cursorX = 300;
@@ -230,6 +231,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 ''';
 
   bool _handleKeyEvent(KeyEvent event) {
+    if (_dialogShowing) return false;
     final key = event.logicalKey;
     final isDpad = key == LogicalKeyboardKey.arrowUp ||
         key == LogicalKeyboardKey.arrowDown ||
@@ -320,6 +322,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 
   Future<String?> _showTextInputDialog(
       String value, String type, String placeholder) {
+    _dialogShowing = true;
     final ctrl = TextEditingController(text: value);
     final isPassword = type == 'password';
     final isEmail = type == 'email';
@@ -367,7 +370,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() => _dialogShowing = false);
   }
 
   void _ensureTimer() {

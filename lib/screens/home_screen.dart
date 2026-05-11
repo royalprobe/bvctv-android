@@ -79,6 +79,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _preloadFocusTimer;
   WebViewController? _preloadController;
   String? _preloadedVideoId;
+  bool _bgSessionDone = false;
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -1355,6 +1356,32 @@ class _HomeScreenState extends State<HomeScreen> {
             left: 0, top: 0,
             width: 1, height: 1,
             child: WebViewWidget(controller: _preloadController!),
+          ),
+        // Hintergrund-WebView: lädt tv.volleyballworld.com mit ctx-Parameter um TV-Session zu etablieren
+        if (!_bgSessionDone)
+          Positioned(
+            left: 0, top: 0, width: 1, height: 1,
+            child: InAppWebView(
+              initialUrlRequest: URLRequest(
+                url: WebUri('https://tv.volleyballworld.com/?ctx=${_buildCtx()}'),
+              ),
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              ),
+              onLoadStop: (controller, url) async {
+                final urlStr = url?.toString() ?? '';
+                if (urlStr.contains('tv.volleyballworld.com')) {
+                  final token = widget.accessToken.replaceAll('"', '\\"');
+                  await controller.evaluateJavascript(source:
+                    'try{localStorage.setItem("quick-bricky-login-flow.access_token","$token");}catch(e){}');
+                  debugPrint('[BVCTV] bgSession: injected at $urlStr');
+                } else {
+                  debugPrint('[BVCTV] bgSession: redirected to $urlStr (no injection)');
+                }
+                if (mounted) setState(() => _bgSessionDone = true);
+              },
+            ),
           ),
       ]),
       ),
