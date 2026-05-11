@@ -1871,6 +1871,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _isInBlackScreen = false;
   bool _showControls = true;
   bool _playerReady = false;
+  bool _isOnAuthPage = false;
   bool _isTV = false;
   String _debugMsg = '';
 
@@ -1947,7 +1948,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) {
+        onPageStarted: (url) {
+          final isAuth = !url.contains('volleyballworld.com') && !url.contains('zapp-5434');
+          if (mounted && _isOnAuthPage != isAuth) {
+            setState(() {
+              _isOnAuthPage = isAuth;
+              if (!isAuth) _playerReady = false;
+            });
+          }
           _runJs(r'''
             (function() {
               if (window._qualityPatched) return;
@@ -2035,7 +2043,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           _onPageFinished();
           // Fallback: nur wenn ready-Event und play-Event nie kommen
           Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && !_playerReady) {
+            if (mounted && !_playerReady && !_isOnAuthPage) {
               setState(() { _playerReady = true; _isPlaying = true; });
               _startHideControlsTimer();
               _startPositionPolling();
@@ -2642,8 +2650,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               )),
             )),
 
-          // Schwarze Abdeckung bis Player bereit ist
-          if (!_playerReady)
+          // Schwarze Abdeckung bis Player bereit ist (nicht auf Auth-Seiten)
+          if (!_playerReady && !_isOnAuthPage)
             Positioned.fill(child: Container(
               color: Colors.black,
               child: const Center(child: CircularProgressIndicator(color: Colors.orange)),
@@ -2659,7 +2667,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
           // Vollflächige Touch-Overlay: links=zurück, rechts=vor
           // Erster Tap blendet Controls ein, erst weiterer Tap seeked
-          if (_playerReady)
+          if (_playerReady && !_isOnAuthPage)
             Positioned.fill(child: Row(children: [
               Expanded(child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -2700,7 +2708,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           )),
 
           // Controls ein/ausblenden per Tap auf die Mitte (wo keine Seek-Bereiche sind)
-          if (_showControls) _buildControls(),
+          if (_showControls && !_isOnAuthPage) _buildControls(),
         ]),
       ),
     );
