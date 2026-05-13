@@ -469,7 +469,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         ),
                         onWebViewCreated: (c) => _webController = c,
                         onLoadStart: (_, __) => setState(() => _loading = true),
-                        onLoadStop: (_, __) async {
+                        onLoadStop: (_, url) async {
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
                           if (_pendingCode != null) {
@@ -479,6 +479,24 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                             final code = _pendingCode!;
                             _pendingCode = null;
                             await Future.delayed(const Duration(milliseconds: 800));
+                            // TV session cookies sichern bevor wir den WebView schließen
+                            try {
+                              final cm = CookieManager.instance();
+                              final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
+                              if (cookies.isNotEmpty) {
+                                final cookieJson = jsonEncode(cookies.map((c) => {
+                                  'name': c.name, 'value': c.value,
+                                  'domain': c.domain ?? '.tv.volleyballworld.com',
+                                  'path': c.path ?? '/',
+                                }).toList());
+                                await const FlutterSecureStorage().write(key: 'tv_cookies', value: cookieJson);
+                                debugPrint('[BVCTV] login: saved ${cookies.length} TV cookies');
+                              } else {
+                                debugPrint('[BVCTV] login: no TV cookies to save');
+                              }
+                            } catch (e) {
+                              debugPrint('[BVCTV] login: cookie save error $e');
+                            }
                             if (mounted) nav.pop(code);
                           }
                         },

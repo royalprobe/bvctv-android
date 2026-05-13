@@ -83,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _preloadedVideoId;
   bool _bgSessionDone = false;
   String? _silentCodeVerifier;
+  final Completer<void> _bgSessionCompleter = Completer<void>();
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -170,6 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSettings();
     _loadTournamentList();
     _loadLiveAndUpcoming();
+    _restoreTvCookies();
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
@@ -526,6 +528,35 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _restoreTvCookies() async {
+    try {
+      final stored = await _storage.read(key: 'tv_cookies');
+      if (stored == null) {
+        debugPrint('[BVCTV] restore: no stored TV cookies, trying silent OAuth');
+        return;
+      }
+      final cookieList = jsonDecode(stored) as List;
+      final cm = CookieManager.instance();
+      for (final c in cookieList) {
+        await cm.setCookie(
+          url: WebUri('https://tv.volleyballworld.com'),
+          name: c['name'] as String,
+          value: c['value'] as String,
+          domain: c['domain'] as String? ?? '.tv.volleyballworld.com',
+          path: c['path'] as String? ?? '/',
+          isSecure: true,
+          isHttpOnly: true,
+          expiresDate: DateTime.now().add(const Duration(days: 30)).millisecondsSinceEpoch,
+        );
+      }
+      debugPrint('[BVCTV] restore: restored ${cookieList.length} TV cookies');
+      if (mounted) setState(() => _bgSessionDone = true);
+      if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
+    } catch (e) {
+      debugPrint('[BVCTV] restore: error $e');
+    }
   }
 
   String _buildCtx() {
@@ -971,6 +1002,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _launchPlayer(VideoItem video, {required bool seekToLive}) async {
+    // Warten bis Session-Cookies bereit sind (max. 6s)
+    if (!_bgSessionDone) {
+      await _bgSessionCompleter.future.timeout(
+        const Duration(seconds: 6),
+        onTimeout: () {},
+      );
+      if (!mounted) return;
+    }
     final streamUrl = await _fetchStreamUrl(video.id);
     if (!mounted) return;
 
@@ -1408,12 +1447,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 debugPrint('[BVCTV] bgSession loaded: $urlStr');
                 if (urlStr.contains('tv.volleyballworld.com')) {
                   if (mounted) setState(() => _bgSessionDone = true);
+                  if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
                 }
               },
               onReceivedError: (controller, request, error) {
                 debugPrint('[BVCTV] bgSession error: ${error.description} url=${request.url}');
-                // prompt=none fails if no SSO session → silently give up, player will show login
                 if (mounted) setState(() => _bgSessionDone = true);
+                if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
               },
             ),
           ),
