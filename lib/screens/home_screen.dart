@@ -17,6 +17,8 @@ import 'dart:async';
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math';
+import 'package:crypto/crypto.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 
@@ -80,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
   WebViewController? _preloadController;
   String? _preloadedVideoId;
   bool _bgSessionDone = false;
+  String? _silentCodeVerifier;
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -531,6 +534,32 @@ class _HomeScreenState extends State<HomeScreen> {
       'platform': 'web',
     });
     return base64Url.encode(utf8.encode(payload));
+  }
+
+  String _generateCodeVerifier() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  String _generateCodeChallenge(String verifier) {
+    final digest = sha256.convert(utf8.encode(verifier));
+    return base64UrlEncode(digest.bytes).replaceAll('=', '');
+  }
+
+  String _buildSilentAuthUrl() {
+    _silentCodeVerifier = _generateCodeVerifier();
+    return Uri.parse('https://signin.volleyballworld.com/service/oidc/vbtv-web/authorize').replace(
+      queryParameters: {
+        'response_type': 'code',
+        'client_id': '93d30c71-8a06-46c3-a288-dfb48f082313',
+        'redirect_uri': 'https://tv.volleyballworld.com/api/oauth',
+        'scope': 'openid email profile',
+        'code_challenge': _generateCodeChallenge(_silentCodeVerifier!),
+        'code_challenge_method': 'S256',
+        'prompt': 'none',
+      },
+    ).toString();
   }
 
   String? _findVideoUrl(dynamic obj) {
@@ -1357,28 +1386,33 @@ class _HomeScreenState extends State<HomeScreen> {
             width: 1, height: 1,
             child: WebViewWidget(controller: _preloadController!),
           ),
-        // Hintergrund-WebView: lädt tv.volleyballworld.com mit ctx-Parameter um TV-Session zu etablieren
+        // Silent OAuth: etabliert server-side Session-Cookies auf tv.volleyballworld.com
         if (!_bgSessionDone)
           Positioned(
             left: 0, top: 0, width: 1, height: 1,
             child: InAppWebView(
               initialUrlRequest: URLRequest(
-                url: WebUri('https://tv.volleyballworld.com/?ctx=${_buildCtx()}'),
+                url: WebUri(_buildSilentAuthUrl()),
               ),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                userAgent: 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
               ),
+              shouldOverrideUrlLoading: (controller, action) async {
+                final url = action.request.url?.toString() ?? '';
+                debugPrint('[BVCTV] bgSession nav: $url');
+                return NavigationActionPolicy.ALLOW;
+              },
               onLoadStop: (controller, url) async {
                 final urlStr = url?.toString() ?? '';
+                debugPrint('[BVCTV] bgSession loaded: $urlStr');
                 if (urlStr.contains('tv.volleyballworld.com')) {
-                  final token = widget.accessToken.replaceAll('"', '\\"');
-                  await controller.evaluateJavascript(source:
-                    'try{localStorage.setItem("quick-bricky-login-flow.access_token","$token");}catch(e){}');
-                  debugPrint('[BVCTV] bgSession: injected at $urlStr');
-                } else {
-                  debugPrint('[BVCTV] bgSession: redirected to $urlStr (no injection)');
+                  if (mounted) setState(() => _bgSessionDone = true);
                 }
+              },
+              onReceivedError: (controller, request, error) {
+                debugPrint('[BVCTV] bgSession error: ${error.description} url=${request.url}');
+                // prompt=none fails if no SSO session → silently give up, player will show login
                 if (mounted) setState(() => _bgSessionDone = true);
               },
             ),
