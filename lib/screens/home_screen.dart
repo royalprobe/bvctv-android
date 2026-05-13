@@ -1990,7 +1990,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   WebViewController? _controller;
   InAppWebViewController? _inAppController;
 
-  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
+  bool get _useInAppWebView => !kIsWeb && (Platform.isAndroid || Platform.isWindows);
 
   void _runJs(String js) {
     if (_useInAppWebView) {
@@ -2875,16 +2875,23 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   Widget _buildWebViewWidget() {
     if (_useInAppWebView) {
+      final tokenEscaped = widget.accessToken.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
       return InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.playerUrl)),
         initialUserScripts: UnmodifiableListView([
           UserScript(
             source: '''
-              window.FlutterChannel = {
-                postMessage: function(msg) {
-                  try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
-                }
-              };
+              (function() {
+                // Token vor jeder Seiten-JS setzen – verhindert client-seitige Umleitung
+                try {
+                  localStorage.setItem("quick-bricky-login-flow.access_token", "$tokenEscaped");
+                } catch(e) {}
+                window.FlutterChannel = {
+                  postMessage: function(msg) {
+                    try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
+                  }
+                };
+              })();
             ''',
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
           ),
@@ -2904,10 +2911,21 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             },
           );
         },
+        onLoadStart: (controller, url) {
+          final urlStr = url?.toString() ?? '';
+          final isAuth = !urlStr.contains('volleyballworld.com') && !urlStr.contains('zapp-5434');
+          debugPrint('[BVCTV] player nav: $urlStr (auth=$isAuth)');
+          if (mounted && _isOnAuthPage != isAuth) {
+            setState(() {
+              _isOnAuthPage = isAuth;
+              if (!isAuth) _playerReady = false;
+            });
+          }
+        },
         onLoadStop: (controller, url) {
           _onPageFinished();
           Future.delayed(const Duration(seconds: 4), () {
-            if (mounted && !_playerReady) {
+            if (mounted && !_playerReady && !_isOnAuthPage) {
               setState(() { _playerReady = true; _isPlaying = true; });
               _startHideControlsTimer();
               _startPositionPolling();
