@@ -1018,10 +1018,9 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => PlayerScreen(title: video.teams, streamUrl: streamUrl),
       ));
     } else {
-      // Fallback: ctx direkt als Parameter an tv.volleyballworld.com/player
       final ctx = _buildCtx();
-      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}');
-      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&ctx=$ctx';
+      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => WebViewPlayerScreen(
           title: video.teams,
@@ -2911,10 +2910,25 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             },
           );
         },
+        shouldOverrideUrlLoading: (controller, action) async {
+          final url = action.request.url?.toString() ?? '';
+          debugPrint('[BVCTV] player nav: $url');
+          // OAuth-Callback: Session-Cookies werden vom Server gesetzt
+          if (url.startsWith('https://tv.volleyballworld.com/api/oauth') && url.contains('code=')) {
+            debugPrint('[BVCTV] player: OAuth-Code erhalten, lade Player nach Session-Aufbau neu');
+            Future.delayed(const Duration(milliseconds: 2500), () {
+              if (mounted) {
+                setState(() { _isOnAuthPage = false; _playerReady = false; });
+                _loadUrl(widget.playerUrl);
+              }
+            });
+          }
+          return NavigationActionPolicy.ALLOW;
+        },
         onLoadStart: (controller, url) {
           final urlStr = url?.toString() ?? '';
-          final isAuth = !urlStr.contains('volleyballworld.com') && !urlStr.contains('zapp-5434');
-          debugPrint('[BVCTV] player nav: $urlStr (auth=$isAuth)');
+          final isAuth = urlStr.contains('signin.volleyballworld.com') ||
+              (!urlStr.contains('tv.volleyballworld.com') && !urlStr.contains('zapp-5434'));
           if (mounted && _isOnAuthPage != isAuth) {
             setState(() {
               _isOnAuthPage = isAuth;
