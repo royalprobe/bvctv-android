@@ -128,7 +128,10 @@
       "PowerShell(Get-Content \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Temp\\\\bvctv_logcat.txt\" | Where-Object { $_ -match \"flutter|volleyballworld|signin|player|oauth|login|cookie|session|redirect|BVCTV\" } | Select-Object -Last 60)",
       "Bash(dart analyze *)",
       "Bash(Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.32.apk\" -Force)",
-      "Bash(Write-Host \"Backup done\")"
+      "Bash(Write-Host \"Backup done\")",
+      "Bash(adb logcat *)",
+      "Bash(Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.36.apk\" -Force)",
+      "Bash(Write-Output \"copied\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
