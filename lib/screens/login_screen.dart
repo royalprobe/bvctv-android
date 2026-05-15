@@ -104,10 +104,16 @@ class _LoginScreenState extends State<LoginScreen> {
         if (token != null && mounted) {
           await const FlutterSecureStorage()
               .write(key: 'access_token', value: token);
-          Navigator.pushReplacement(
+          await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => HomeScreen(accessToken: token)),
+            MaterialPageRoute(builder: (_) => _Phase2Screen(accessToken: token)),
           );
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => HomeScreen(accessToken: token)),
+            );
+          }
         }
       } else {
         setState(() =>
@@ -576,4 +582,98 @@ class _CursorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter old) => false;
+}
+
+class _Phase2Screen extends StatefulWidget {
+  final String accessToken;
+  const _Phase2Screen({required this.accessToken});
+
+  @override
+  State<_Phase2Screen> createState() => _Phase2ScreenState();
+}
+
+class _Phase2ScreenState extends State<_Phase2Screen> {
+  Timer? _timer;
+  bool _phase2Done = false;
+
+  static String _buildCtx(String accessToken) {
+    final payload = jsonEncode({
+      'quick-bricky-login-flow.access_token': accessToken,
+      'platform': 'web',
+    });
+    return base64Url.encode(utf8.encode(payload));
+  }
+
+  void _pop() {
+    _timer?.cancel();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(seconds: 12), () {
+      debugPrint('[BVCTV] phase2: timeout');
+      _pop();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctx = _buildCtx(widget.accessToken);
+    final selfLink = Uri.encodeComponent(
+        'https://zapp-5434-volleyball-tv.web.app/jw/media/rqgkYjJX?ctx=$ctx');
+    final playerUrl =
+        'https://tv.volleyballworld.com/player?self-link=$selfLink';
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              child: InAppWebView(
+                initialUrlRequest: URLRequest(url: WebUri(playerUrl)),
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  userAgent:
+                      'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                ),
+                shouldOverrideUrlLoading: (controller, action) async {
+                  final url = action.request.url?.toString() ?? '';
+                  debugPrint('[BVCTV] phase2 nav: $url');
+                  if (url.startsWith(
+                      'https://tv.volleyballworld.com/api/oauth')) {
+                    _phase2Done = true;
+                    debugPrint('[BVCTV] phase2: api/oauth intercepted');
+                  }
+                  return NavigationActionPolicy.ALLOW;
+                },
+                onLoadStop: (controller, url) {
+                  debugPrint('[BVCTV] phase2 loadStop: $url');
+                  if (_phase2Done) {
+                    debugPrint('[BVCTV] phase2: complete, popping');
+                    _pop();
+                  }
+                },
+              ),
+            ),
+            const Center(
+              child: CircularProgressIndicator(color: Colors.orange),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
