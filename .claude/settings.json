@@ -167,11 +167,16 @@
       "PowerShell(Get-Command adb -ErrorAction SilentlyContinue; if \\(-not $?\\) { Get-ChildItem \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\" -ErrorAction SilentlyContinue })",
       "PowerShell(python deploy_update.py -m \"Revert to v1.0.36 state \\(silent prompt=none auth\\)\")",
       "Bash(git restore *)",
-      "PowerShell(python deploy_update.py -m \"Revert to v1.0.21 state\")"
+      "PowerShell(python deploy_update.py -m \"Revert to v1.0.21 state\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell pm list packages | Select-String -Pattern \"vbtv|bvctv\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Write-Host \"Logs cleared. Ready for reproduction.\")",
+      "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick.log\"; if \\(Test-Path $logFile\\) { $size = \\(Get-Item $logFile\\).Length; Write-Host \"Log size: $size bytes\"; Get-Content $logFile | Select-String -Pattern \"oauth|redirect|code=|signin|tv\\\\.volleyball|fulljit|navigation|loginCancel|Cancelled|error\" -CaseSensitive:$false | Select-Object -Last 80 } else { Write-Host \"Log not found\" })",
+      "PowerShell(python deploy_update.py -m \"Fire Stick: onRenderProcessGone handler + remove clearCache to fix Login Cancelled on submit\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
-      "c:\\Users\\Simon\\BVCTV\\build\\app\\outputs\\flutter-apk"
+      "c:\\Users\\Simon\\BVCTV\\build\\app\\outputs\\flutter-apk",
+      "C:\\Users\\Simon\\BVCTV\\build\\app\\outputs\\flutter-apk"
     ]
   }
 }

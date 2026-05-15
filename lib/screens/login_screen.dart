@@ -455,8 +455,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         initialUrlRequest: URLRequest(url: WebUri(widget.url)),
                         initialSettings: InAppWebViewSettings(
                           javaScriptEnabled: true,
-                          cacheMode: CacheMode.LOAD_NO_CACHE,
-                          clearCache: true,
                           userAgent:
                               'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                         ),
@@ -465,6 +463,16 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         onLoadStop: (_, __) async {
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
+                        },
+                        // Fire Stick / Amazon WebView crasht den Renderer beim
+                        // OIDC-Submit. Statt Route fallen zu lassen (→ "Login
+                        // Cancelled"), URL neu laden — Session-Cookies bleiben.
+                        onRenderProcessGone: (controller, _) async {
+                          if (!mounted) return;
+                          setState(() => _loading = true);
+                          await controller.loadUrl(
+                            urlRequest: URLRequest(url: WebUri(widget.url)),
+                          );
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
