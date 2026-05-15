@@ -1925,6 +1925,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _playerReady = false;
   bool _isOnAuthPage = false;
   bool _isTV = false;
+  bool _skipSilentAuth = false;
   String _debugMsg = '';
 
   @override
@@ -2812,14 +2813,33 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         shouldOverrideUrlLoading: (controller, action) async {
           final url = action.request.url?.toString() ?? '';
           debugPrint('[BVCTV] player nav: $url');
-          if (url.startsWith('https://tv.volleyballworld.com/api/oauth') && url.contains('code=')) {
-            debugPrint('[BVCTV] player: auth callback, reloading player');
-            Future.delayed(const Duration(milliseconds: 1500), () {
-              if (mounted) {
-                setState(() { _isOnAuthPage = false; _playerReady = false; });
-                _loadUrl(widget.playerUrl);
-              }
-            });
+          if (url.startsWith('https://tv.volleyballworld.com/api/oauth')) {
+            if (url.contains('code=')) {
+              debugPrint('[BVCTV] player: auth ok, reloading player');
+              Future.delayed(const Duration(milliseconds: 2500), () {
+                if (mounted) {
+                  setState(() { _isOnAuthPage = false; _playerReady = false; _skipSilentAuth = false; });
+                  _loadUrl(widget.playerUrl);
+                }
+              });
+            } else if (url.contains('error=')) {
+              debugPrint('[BVCTV] player: silent auth failed, showing login');
+              if (mounted) setState(() => _skipSilentAuth = true);
+              Future.delayed(const Duration(milliseconds: 100), () {
+                if (mounted) _loadUrl(widget.playerUrl);
+              });
+              return NavigationActionPolicy.CANCEL;
+            }
+            return NavigationActionPolicy.ALLOW;
+          }
+          if (url.contains('signin.volleyballworld.com')) {
+            if (!_skipSilentAuth && !url.contains('prompt=none')) {
+              debugPrint('[BVCTV] player: trying silent auth (prompt=none)');
+              final sep = url.contains('?') ? '&' : '?';
+              controller.loadUrl(urlRequest: URLRequest(url: WebUri('$url${sep}prompt=none')));
+              return NavigationActionPolicy.CANCEL;
+            }
+            if (_skipSilentAuth) setState(() => _skipSilentAuth = false);
           }
           return NavigationActionPolicy.ALLOW;
         },

@@ -472,9 +472,11 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                               'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                         ),
                         onWebViewCreated: (c) => _webController = c,
-                        onLoadStart: (_, __) => setState(() => _loading = true),
+                        onLoadStart: (_, __) {
+                          if (!_phase2Started) setState(() => _loading = true);
+                        },
                         onLoadStop: (_, url) async {
-                          setState(() => _loading = false);
+                          if (!_phase2Started) setState(() => _loading = false);
                           final nav = Navigator.of(context);
                           await _webController?.evaluateJavascript(source: _initScript);
                           if (_phase2Done) {
@@ -520,11 +522,20 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           return NavigationActionPolicy.ALLOW;
                         },
                       ),
-                      if (_loading)
+                      if (_phase2Started && !_phase2Done)
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black,
+                            child: const Center(
+                              child: CircularProgressIndicator(color: Colors.orange),
+                            ),
+                          ),
+                        )
+                      else if (_loading)
                         const Center(
                           child: CircularProgressIndicator(color: Colors.orange),
                         ),
-                      if (isTV) Positioned(
+                      if (isTV && !_phase2Started) Positioned(
                         left: _cursorX,
                         top: _cursorY,
                         child: const IgnorePointer(child: _CursorWidget()),
