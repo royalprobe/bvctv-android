@@ -2026,7 +2026,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _playerReady = false;
   bool _isOnAuthPage = false;
   bool _isTV = false;
-  bool _skipSilentAuth = false;
   String _debugMsg = '';
 
   @override
@@ -2914,43 +2913,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         shouldOverrideUrlLoading: (controller, action) async {
           final url = action.request.url?.toString() ?? '';
           debugPrint('[BVCTV] player nav: $url');
-
-          // OAuth-Callback von tv.volleyballworld.com
-          if (url.startsWith('https://tv.volleyballworld.com/api/oauth')) {
-            if (url.contains('code=')) {
-              // Erfolg: Session-Cookies werden serverseitig gesetzt
-              debugPrint('[BVCTV] player: stille Auth erfolgreich, lade Player neu');
-              Future.delayed(const Duration(milliseconds: 2500), () {
-                if (mounted) {
-                  setState(() { _isOnAuthPage = false; _playerReady = false; _skipSilentAuth = false; });
-                  _loadUrl(widget.playerUrl);
-                }
-              });
-            } else if (url.contains('error=')) {
-              // SSO-Session abgelaufen → Anmeldung im Player-Fenster nötig
-              debugPrint('[BVCTV] player: stille Auth fehlgeschlagen, zeige Login');
-              if (mounted) setState(() => _skipSilentAuth = true);
-              // Player neu laden → Weiterleitung zu signin → diesmal ALLOW
-              Future.delayed(const Duration(milliseconds: 100), () {
-                if (mounted) _loadUrl(widget.playerUrl);
-              });
-              return NavigationActionPolicy.CANCEL;
-            }
-            return NavigationActionPolicy.ALLOW;
+          // OAuth-Callback: Session-Cookies werden vom Server gesetzt
+          if (url.startsWith('https://tv.volleyballworld.com/api/oauth') && url.contains('code=')) {
+            debugPrint('[BVCTV] player: OAuth-Code erhalten, lade Player nach Session-Aufbau neu');
+            Future.delayed(const Duration(milliseconds: 2500), () {
+              if (mounted) {
+                setState(() { _isOnAuthPage = false; _playerReady = false; });
+                _loadUrl(widget.playerUrl);
+              }
+            });
           }
-
-          // Signin-Umleitung abfangen und prompt=none versuchen
-          if (url.contains('signin.volleyballworld.com')) {
-            if (!_skipSilentAuth && !url.contains('prompt=none')) {
-              debugPrint('[BVCTV] player: versuche stille Auth (prompt=none)');
-              final sep = url.contains('?') ? '&' : '?';
-              controller.loadUrl(urlRequest: URLRequest(url: WebUri('$url${sep}prompt=none')));
-              return NavigationActionPolicy.CANCEL;
-            }
-            // prompt=none hat nicht geklappt oder Login-Seite wurde bewusst angezeigt
-            if (_skipSilentAuth) setState(() => _skipSilentAuth = false);
-          }
-
           return NavigationActionPolicy.ALLOW;
         },
         onLoadStart: (controller, url) {
