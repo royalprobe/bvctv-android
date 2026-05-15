@@ -131,7 +131,13 @@
       "Bash(Write-Host \"Backup done\")",
       "Bash(adb logcat *)",
       "Bash(Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.36.apk\" -Force)",
-      "Bash(Write-Output \"copied\")"
+      "Bash(Write-Output \"copied\")",
+      "PowerShell(gh release create v1.0.36 \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.36.apk#bvctv-v1.0.36.apk\" --title \"v1.0.36\" --notes \"Silent Auth im Player: Login beim App-Start reicht jetzt aus. Kein zweiter Login mehr noetig wenn die SSO-Session aktiv ist.\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('tag_name','?'\\)\\)\")",
+      "Bash(env)",
+      "Bash(git config *)",
+      "Bash(Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\app-release-1.0.38.apk\" -Force)",
+      "Bash(Write-Host \"Copied\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

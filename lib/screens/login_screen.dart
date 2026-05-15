@@ -165,7 +165,10 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
-  String? _pendingCode;
+  String? _oidcCode;
+  bool _phase2Started = false;
+  bool _phase2Done = false;
+  Timer? _phase2Timer;
   bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
 
@@ -418,6 +421,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _moveTimer?.cancel();
+    _phase2Timer?.cancel();
     super.dispose();
   }
 
@@ -471,42 +475,45 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         onLoadStart: (_, __) => setState(() => _loading = true),
                         onLoadStop: (_, url) async {
                           setState(() => _loading = false);
+                          final nav = Navigator.of(context);
                           await _webController?.evaluateJavascript(source: _initScript);
-                          if (_pendingCode != null) {
-                            if (!mounted) return;
-                            final nav = Navigator.of(context);
+                          if (_phase2Done) {
+                            _phase2Timer?.cancel();
+                            if (mounted) nav.pop(_oidcCode);
+                            return;
+                          }
+                          if (_oidcCode != null && !_phase2Started) {
+                            _phase2Started = true;
                             setState(() => _loading = true);
-                            final code = _pendingCode!;
-                            _pendingCode = null;
-                            await Future.delayed(const Duration(milliseconds: 800));
-                            // TV session cookies sichern bevor wir den WebView schließen
-                            try {
-                              final cm = CookieManager.instance();
-                              final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
-                              if (cookies.isNotEmpty) {
-                                final cookieJson = jsonEncode(cookies.map((c) => {
-                                  'name': c.name, 'value': c.value,
-                                  'domain': c.domain ?? '.tv.volleyballworld.com',
-                                  'path': c.path ?? '/',
-                                }).toList());
-                                await const FlutterSecureStorage().write(key: 'tv_cookies', value: cookieJson);
-                                debugPrint('[BVCTV] login: saved ${cookies.length} TV cookies');
-                              } else {
-                                debugPrint('[BVCTV] login: no TV cookies to save');
+                            _phase2Timer = Timer(const Duration(seconds: 5), () {
+                              if (mounted) {
+                                debugPrint('[BVCTV] login: Phase 2 timeout, continuing');
+                                nav.pop(_oidcCode);
                               }
-                            } catch (e) {
-                              debugPrint('[BVCTV] login: cookie save error $e');
-                            }
-                            if (mounted) nav.pop(code);
+                            });
+                            final selfLink = Uri.encodeComponent(
+                                'https://zapp-5434-volleyball-tv.web.app/jw/media/rqgkYjJX');
+                            debugPrint('[BVCTV] login: starting Phase 2 (player fulljitflow)');
+                            await _webController?.loadUrl(
+                              urlRequest: URLRequest(url: WebUri(
+                                  'https://tv.volleyballworld.com/player?self-link=$selfLink')),
+                            );
                           }
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
                           if (url.startsWith(widget.redirectUri)) {
-                            final code = Uri.parse(url).queryParameters['code'];
+                            final uri = Uri.parse(url);
+                            final code = uri.queryParameters['code'];
+                            final state = uri.queryParameters['state'] ?? '';
                             if (code != null && code.isNotEmpty) {
-                              _pendingCode = code;
-                              return NavigationActionPolicy.ALLOW;
+                              if (state.startsWith('eyJ')) {
+                                _phase2Done = true;
+                                debugPrint('[BVCTV] login: Phase 2 code received (fulljitflow)');
+                              } else if (_oidcCode == null) {
+                                _oidcCode = code;
+                                debugPrint('[BVCTV] login: Phase 1 OIDC code received');
+                              }
                             }
                             return NavigationActionPolicy.ALLOW;
                           }

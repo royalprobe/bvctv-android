@@ -79,8 +79,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _preloadFocusTimer;
   WebViewController? _preloadController;
   String? _preloadedVideoId;
-  bool _bgSessionDone = false;
-  final Completer<void> _bgSessionCompleter = Completer<void>();
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -168,7 +166,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSettings();
     _loadTournamentList();
     _loadLiveAndUpcoming();
-    _restoreTvCookies();
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
@@ -184,14 +181,6 @@ class _HomeScreenState extends State<HomeScreen> {
       PackageInfo.fromPlatform().then((i) { if (mounted) setState(() => _appVersion = i.version); });
       Future.delayed(const Duration(seconds: 10), _checkForUpdateOnce);
     }
-    // Sicherheitsnetz: bgSession nach 15s als erledigt markieren
-    Future.delayed(const Duration(seconds: 15), () {
-      if (mounted && !_bgSessionDone) {
-        debugPrint('[BVCTV] bgSession: Timeout – kein fulljitflow in 15s');
-        setState(() => _bgSessionDone = true);
-        if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-      }
-    });
   }
 
   Future<void> _checkForUpdateOnce() async {
@@ -533,36 +522,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _restoreTvCookies() async {
-    // Cookies in den gemeinsamen Cookie-Jar laden (Beschleunigung des Hintergrund-WebViews)
-    // _bgSessionDone wird hier NICHT gesetzt – der Hintergrund-WebView macht das nach
-    // erfolgreichem fulljitflow-Abschluss
-    try {
-      final stored = await _storage.read(key: 'tv_cookies');
-      if (stored == null) {
-        debugPrint('[BVCTV] restore: keine gespeicherten TV-Cookies');
-        return;
-      }
-      final cookieList = jsonDecode(stored) as List;
-      final cm = CookieManager.instance();
-      for (final c in cookieList) {
-        await cm.setCookie(
-          url: WebUri('https://tv.volleyballworld.com'),
-          name: c['name'] as String,
-          value: c['value'] as String,
-          domain: c['domain'] as String? ?? '.tv.volleyballworld.com',
-          path: c['path'] as String? ?? '/',
-          isSecure: true,
-          isHttpOnly: true,
-          expiresDate: DateTime.now().add(const Duration(days: 30)).millisecondsSinceEpoch,
-        );
-      }
-      debugPrint('[BVCTV] restore: ${cookieList.length} TV-Cookies in Cookie-Jar geladen');
-    } catch (e) {
-      debugPrint('[BVCTV] restore: Fehler $e');
-    }
   }
 
   String _buildCtx() {
@@ -982,14 +941,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _launchPlayer(VideoItem video, {required bool seekToLive}) async {
-    // Warten bis Session-Cookies bereit sind (max. 6s)
-    if (!_bgSessionDone) {
-      await _bgSessionCompleter.future.timeout(
-        const Duration(seconds: 6),
-        onTimeout: () {},
-      );
-      if (!mounted) return;
-    }
     final streamUrl = await _fetchStreamUrl(video.id);
     if (!mounted) return;
 
@@ -1403,60 +1354,6 @@ class _HomeScreenState extends State<HomeScreen> {
             left: 0, top: 0,
             width: 1, height: 1,
             child: WebViewWidget(controller: _preloadController!),
-          ),
-        // Hintergrund-WebView: fulljitflow-Session via Player-URL aufbauen
-        // Wenn App-Start-SSO-Session erkannt wird, läuft der Workflow lautlos durch
-        if (!_bgSessionDone)
-          Positioned(
-            left: 0, top: 0, width: 1, height: 1,
-            child: InAppWebView(
-              initialUrlRequest: URLRequest(
-                url: WebUri(() {
-                  final ctx = _buildCtx();
-                  final selfLink = Uri.encodeComponent(
-                      'https://zapp-5434-volleyball-tv.web.app/jw/media/rqgkYjJX?ctx=$ctx');
-                  return 'https://tv.volleyballworld.com/player?self-link=$selfLink';
-                }()),
-              ),
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              ),
-              shouldOverrideUrlLoading: (controller, action) async {
-                final url = action.request.url?.toString() ?? '';
-                debugPrint('[BVCTV] bgSession nav: $url');
-                return NavigationActionPolicy.ALLOW;
-              },
-              onLoadStop: (controller, url) async {
-                final urlStr = url?.toString() ?? '';
-                debugPrint('[BVCTV] bgSession loaded: $urlStr');
-                if (urlStr.contains('tv.volleyballworld.com') && !urlStr.contains('signin.')) {
-                  // TV-Session erfolgreich – Cookies sichern für nächsten Start
-                  try {
-                    final cm = CookieManager.instance();
-                    final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
-                    if (cookies.isNotEmpty) {
-                      final cookieJson = jsonEncode(cookies.map((c) => {
-                        'name': c.name, 'value': c.value,
-                        'domain': c.domain ?? '.tv.volleyballworld.com',
-                        'path': c.path ?? '/',
-                      }).toList());
-                      await _storage.write(key: 'tv_cookies', value: cookieJson);
-                      debugPrint('[BVCTV] bgSession: ${cookies.length} TV-Cookies gespeichert');
-                    }
-                  } catch (e) {
-                    debugPrint('[BVCTV] bgSession: Cookie-Fehler $e');
-                  }
-                  if (mounted) setState(() => _bgSessionDone = true);
-                  if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-                }
-              },
-              onReceivedError: (controller, request, error) {
-                debugPrint('[BVCTV] bgSession error: ${error.description} url=${request.url}');
-                if (mounted) setState(() => _bgSessionDone = true);
-                if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-              },
-            ),
           ),
       ]),
       ),
