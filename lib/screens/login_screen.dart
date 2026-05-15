@@ -485,7 +485,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           if (_oidcCode != null && !_phase2Started) {
                             _phase2Started = true;
                             setState(() => _loading = true);
-                            _phase2Timer = Timer(const Duration(seconds: 5), () {
+                            _phase2Timer = Timer(const Duration(seconds: 15), () {
                               if (mounted) {
                                 debugPrint('[BVCTV] login: Phase 2 timeout, continuing');
                                 nav.pop(_oidcCode);
