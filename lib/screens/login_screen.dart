@@ -499,10 +499,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
                           if (!mounted) return;
-                          final urlStr = url?.toString() ?? '';
 
-                          if (_oidcCode != null && !_phase2Active &&
-                              urlStr.contains('api/oauth')) {
+                          if (_oidcCode != null && !_phase2Active) {
                             // Phase 1 done → start Phase 2 in same WebView
                             _phase2Active = true;
                             final nav = Navigator.of(context);
