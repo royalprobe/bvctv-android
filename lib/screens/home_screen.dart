@@ -2028,6 +2028,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _isTV = false;
   String _debugMsg = '';
 
+  // Auth-page cursor for TV remote
+  double _authCursorX = 0;
+  double _authCursorY = 0;
+  bool _authDialogShowing = false;
+  final Set<LogicalKeyboardKey> _authHeldKeys = {};
+  Timer? _authMoveTimer;
+  double _authSpeed = 5.0;
+  static const double _authMinSpeed = 5.0;
+  static const double _authMaxSpeed = 42.0;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -2050,7 +2060,35 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
 
   bool _handleRemoteKey(KeyEvent event) {
-    if (!mounted || !_playerReady) return false;
+    if (!mounted) return false;
+
+    if (_isOnAuthPage && _isTV) {
+      if (_authDialogShowing) return false;
+      final key = event.logicalKey;
+      final isDpad = key == LogicalKeyboardKey.arrowUp ||
+          key == LogicalKeyboardKey.arrowDown ||
+          key == LogicalKeyboardKey.arrowLeft ||
+          key == LogicalKeyboardKey.arrowRight;
+      final isSelect = key == LogicalKeyboardKey.select ||
+          key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter;
+      if (!isDpad && !isSelect) return false;
+      if (event is KeyDownEvent) {
+        if (isSelect) { _authPerformSelect(); return true; }
+        _authHeldKeys.add(key);
+        _ensureAuthMoveTimer();
+        return true;
+      }
+      if (event is KeyUpEvent) {
+        _authHeldKeys.remove(key);
+        if (_authHeldKeys.isEmpty) _stopAuthMoveTimer();
+        return true;
+      }
+      if (event is KeyRepeatEvent) return isDpad || isSelect;
+      return false;
+    }
+
+    if (!_playerReady) return false;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
 
     final isDown = event is KeyDownEvent;
@@ -2754,6 +2792,146 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     if (mounted) Navigator.pop(context);
   }
 
+  void _ensureAuthMoveTimer() {
+    if (_authMoveTimer != null) return;
+    _authSpeed = _authMinSpeed;
+    _authMoveTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!mounted || _authHeldKeys.isEmpty) return;
+      double dx = 0, dy = 0;
+      if (_authHeldKeys.contains(LogicalKeyboardKey.arrowLeft)) dx -= _authSpeed;
+      if (_authHeldKeys.contains(LogicalKeyboardKey.arrowRight)) dx += _authSpeed;
+      if (_authHeldKeys.contains(LogicalKeyboardKey.arrowUp)) dy -= _authSpeed;
+      if (_authHeldKeys.contains(LogicalKeyboardKey.arrowDown)) dy += _authSpeed;
+      final size = MediaQuery.of(context).size;
+      setState(() {
+        _authCursorX = (_authCursorX + dx).clamp(0, size.width - 4);
+        _authCursorY = (_authCursorY + dy).clamp(0, size.height - 4);
+      });
+      _authSpeed = (_authSpeed * 1.07).clamp(_authMinSpeed, _authMaxSpeed);
+    });
+  }
+
+  void _stopAuthMoveTimer() {
+    _authMoveTimer?.cancel();
+    _authMoveTimer = null;
+    _authSpeed = _authMinSpeed;
+  }
+
+  Future<void> _authPerformSelect() async {
+    final xs = _authCursorX.toStringAsFixed(1);
+    final ys = _authCursorY.toStringAsFixed(1);
+    final raw = await _inAppController?.evaluateJavascript(source: '''
+(function(){
+  var el = document.elementFromPoint($xs,$ys);
+  if(!el) return '{"isInput":false}';
+  var inp = el.closest('input,textarea');
+  if(inp) return JSON.stringify({
+    isInput:true, type:inp.type||'text',
+    value:inp.value||'', placeholder:inp.placeholder||''
+  });
+  return '{"isInput":false}';
+})()
+''');
+    if (!mounted) return;
+    try {
+      final data = jsonDecode(raw?.toString() ?? '{}');
+      if (data['isInput'] == true) {
+        final text = await _showAuthTextInputDialog(
+          data['value'] as String? ?? '',
+          data['type'] as String? ?? 'text',
+          data['placeholder'] as String? ?? '',
+        );
+        if (text != null && mounted) {
+          final escaped = text
+              .replaceAll('\\', '\\\\')
+              .replaceAll("'", "\\'")
+              .replaceAll('\n', '\\n');
+          await _inAppController?.evaluateJavascript(source: '''
+(function(){
+  var el = document.elementFromPoint($xs,$ys);
+  if(!el) return;
+  var inp = el.closest('input,textarea') || el;
+  inp.focus();
+  try{
+    var s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+    s.call(inp,'$escaped');
+  }catch(e){ inp.value='$escaped'; }
+  inp.dispatchEvent(new Event('input',{bubbles:true}));
+  inp.dispatchEvent(new Event('change',{bubbles:true}));
+})()
+''');
+        }
+        return;
+      }
+    } catch (_) {}
+    await _inAppController?.evaluateJavascript(source: '''
+(function(){
+  var x=$xs, y=$ys;
+  var el = document.elementFromPoint(x,y);
+  if(!el) return;
+  var target = el.closest('input,button,a,select,textarea,[role="button"],[tabindex]') || el;
+  target.focus();
+  ['mousedown','mouseup','click'].forEach(function(ev){
+    target.dispatchEvent(new MouseEvent(ev,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
+  });
+})();
+''');
+  }
+
+  Future<String?> _showAuthTextInputDialog(
+      String value, String type, String placeholder) {
+    _authDialogShowing = true;
+    final ctrl = TextEditingController(text: value);
+    final isPassword = type == 'password';
+    final isEmail = type == 'email';
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          isEmail ? S.emailAddress : isPassword ? S.password : S.input,
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          obscureText: isPassword,
+          keyboardType:
+              isEmail ? TextInputType.emailAddress : TextInputType.text,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: placeholder.isNotEmpty ? placeholder : null,
+            hintStyle: const TextStyle(color: Colors.white38),
+            filled: true,
+            fillColor: const Color(0xFF2A2A2A),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Colors.orange, width: 2),
+            ),
+          ),
+          onSubmitted: (_) => Navigator.pop(ctx, ctrl.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(S.cancel, style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            autofocus: false,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ).whenComplete(() => _authDialogShowing = false);
+  }
+
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleRemoteKey);
@@ -2761,6 +2939,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _hideControlsTimer?.cancel();
     _positionTimer?.cancel();
     _blackScreenTimer?.cancel();
+    _authMoveTimer?.cancel();
     try {
       _runJs(
         'try{jwplayer().stop();}catch(e){}'
@@ -2867,6 +3046,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
           // Controls ein/ausblenden per Tap auf die Mitte (wo keine Seek-Bereiche sind)
           if (_showControls && !_isOnAuthPage) _buildControls(),
+
+          // Auth-Seite: Cursor für TV-Fernbedienung
+          if (_isOnAuthPage && _isTV)
+            Positioned(
+              left: _authCursorX,
+              top: _authCursorY,
+              child: const IgnorePointer(child: AuthCursorWidget()),
+            ),
         ]),
       ),
     );
@@ -2933,6 +3120,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             setState(() {
               _isOnAuthPage = isAuth;
               if (!isAuth) _playerReady = false;
+              if (isAuth && _isTV) {
+                final size = MediaQuery.of(context).size;
+                _authCursorX = size.width / 2;
+                _authCursorY = size.height / 2;
+              }
             });
           }
         },

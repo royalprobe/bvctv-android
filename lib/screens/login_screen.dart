@@ -600,7 +600,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                             left: _cursorX,
                             top: _cursorY,
                             child: const IgnorePointer(
-                                child: _CursorWidget()),
+                                child: AuthCursorWidget()),
                           ),
                       ],
                     );
@@ -615,19 +615,19 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   }
 }
 
-class _CursorWidget extends StatelessWidget {
-  const _CursorWidget();
+class AuthCursorWidget extends StatelessWidget {
+  const AuthCursorWidget({super.key});
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
       size: const Size(22, 26),
-      painter: _CursorPainter(),
+      painter: AuthCursorPainter(),
     );
   }
 }
 
-class _CursorPainter extends CustomPainter {
+class AuthCursorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final path = Path()
