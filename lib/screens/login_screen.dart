@@ -12,8 +12,6 @@ import 'package:http/http.dart' as http;
 
 import 'home_screen.dart';
 
-enum _AuthMode { oidc, fulljitflow }
-
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -37,7 +35,6 @@ class _LoginScreenState extends State<LoginScreen> {
       'https://signin.volleyballworld.com/service/oidc/vbtv-web/authorize';
   static const _tokenEndpoint =
       'https://signin.volleyballworld.com/api/oidc/vbtv-web/token';
-  static const _phase2VideoId = 'rqgkYjJX';
 
   String _generateCodeVerifier() {
     final random = Random.secure();
@@ -56,7 +53,6 @@ class _LoginScreenState extends State<LoginScreen> {
       _errorMessage = null;
     });
 
-    // ── Phase 1: OIDC login → access_token ──────────────────────────────────
     final codeVerifier = _generateCodeVerifier();
     final authUrl = Uri.parse(_authEndpoint).replace(queryParameters: {
       'response_type': 'code',
@@ -75,7 +71,6 @@ class _LoginScreenState extends State<LoginScreen> {
         builder: (_) => _AuthWebViewScreen(
           url: authUrl.toString(),
           redirectUri: _redirectUri,
-          mode: _AuthMode.oidc,
         ),
       ),
     );
@@ -83,38 +78,13 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
 
     if (code == null) {
-      // Should not normally happen (no back button), but guard defensively.
-      setState(() { _isLoading = false; _errorMessage = S.loginCancelled; });
+      setState(() {
+        _isLoading = false;
+        _errorMessage = S.loginCancelled;
+      });
       return;
     }
 
-    // ── Phase 2: fulljitflow → long-lived player session cookies ─────────────
-    // Remove short-lived OIDC cookies so the player page triggers fulljitflow.
-    try {
-      await CookieManager.instance()
-          .deleteCookies(url: WebUri('https://tv.volleyballworld.com'));
-    } catch (_) {}
-
-    if (!mounted) return;
-
-    final playerUrl =
-        'https://tv.volleyballworld.com/player?self-link='
-        '${Uri.encodeComponent("https://zapp-5434-volleyball-tv.web.app/jw/media/$_phase2VideoId")}';
-
-    await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => _AuthWebViewScreen(
-          url: playerUrl,
-          redirectUri: _redirectUri,
-          mode: _AuthMode.fulljitflow,
-        ),
-      ),
-    );
-
-    if (!mounted) return;
-
-    // ── Token exchange with Phase 1 OIDC code ────────────────────────────────
     try {
       final tokenResponse = await http.post(
         Uri.parse(_tokenEndpoint),
@@ -140,7 +110,8 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       } else {
-        setState(() => _errorMessage = S.tokenError(tokenResponse.statusCode));
+        setState(() =>
+            _errorMessage = S.tokenError(tokenResponse.statusCode));
       }
     } catch (e) {
       setState(() => _errorMessage = S.errorMsg(e.toString()));
@@ -152,9 +123,9 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _errorMessage != null
-          ? Center(
-              child: Column(
+      body: Center(
+        child: _errorMessage != null
+            ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
@@ -174,25 +145,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     label: Text(S.retryLogin),
                   ),
                 ],
-              ),
-            )
-          : const SizedBox.shrink(),
+              )
+            : const CircularProgressIndicator(color: Colors.orange),
+      ),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _AuthWebViewScreen extends StatefulWidget {
   final String url;
   final String redirectUri;
-  final _AuthMode mode;
 
-  const _AuthWebViewScreen({
-    required this.url,
-    required this.redirectUri,
-    required this.mode,
-  });
+  const _AuthWebViewScreen({required this.url, required this.redirectUri});
 
   @override
   State<_AuthWebViewScreen> createState() => _AuthWebViewScreenState();
@@ -201,17 +165,9 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
+  String? _pendingCode;
   bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
-
-  // OIDC mode: captures the authorisation code
-  String? _oidcCode;
-  bool _oidcPopped = false;
-
-  // Fulljitflow mode: waits for session cookies to be set
-  bool _jitPlayerLoaded = false; // skip first onLoadStop (player page itself)
-  bool _jitDone = false;
-  Timer? _jitTimer;
 
   double _cursorX = 300;
   double _cursorY = 200;
@@ -256,6 +212,24 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 ''';
   }
 
+  // Returns JSON: {isInput, type, value, placeholder}
+  static const _checkInputScript = '''
+(function(){
+  var el = document.activeElement;
+  if(!el) return '{"isInput":false}';
+  var t = el.tagName;
+  if(t==='INPUT'||t==='TEXTAREA'){
+    return JSON.stringify({
+      isInput:true,
+      type: el.type||'text',
+      value: el.value||'',
+      placeholder: el.placeholder||''
+    });
+  }
+  return '{"isInput":false}';
+})()
+''';
+
   bool _handleKeyEvent(KeyEvent event) {
     if (_dialogShowing) return false;
     final key = event.logicalKey;
@@ -291,6 +265,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
     final xs = _cursorX.toStringAsFixed(1);
     final ys = _cursorY.toStringAsFixed(1);
 
+    // 1. Erst prüfen was an der Cursor-Position ist — OHNE das Element anzuklicken.
+    //    So wird die native Android-Tastatur nicht ausgelöst bevor der Dialog erscheint.
     final raw = await _webController?.evaluateJavascript(source: '''
 (function(){
   var el = document.elementFromPoint($xs,$ys);
@@ -308,6 +284,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
     try {
       final data = jsonDecode(raw?.toString() ?? '{}');
       if (data['isInput'] == true) {
+        // 2. Dialog öffnen — WebView-Input ist noch NICHT fokussiert
         final text = await _showTextInputDialog(
           data['value'] as String? ?? '',
           data['type'] as String? ?? 'text',
@@ -318,6 +295,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
               .replaceAll('\\', '\\\\')
               .replaceAll("'", "\\'")
               .replaceAll('\n', '\\n');
+          // 3. Fokussieren und Wert setzen — kein Auto-Submit
+          //    Der User klickt den Button danach selbst mit dem Cursor
           await _webController?.evaluateJavascript(source: '''
 (function(){
   var el = document.elementFromPoint($xs,$ys);
@@ -337,8 +316,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
       }
     } catch (_) {}
 
-    await _webController?.evaluateJavascript(
-        source: _clickAtScript(_cursorX, _cursorY));
+    // 4. Kein Eingabefeld: normaler Klick (mousedown/mouseup/click)
+    await _webController?.evaluateJavascript(source: _clickAtScript(_cursorX, _cursorY));
   }
 
   Future<String?> _showTextInputDialog(
@@ -360,16 +339,14 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           controller: ctrl,
           autofocus: true,
           obscureText: isPassword,
-          keyboardType:
-              isEmail ? TextInputType.emailAddress : TextInputType.text,
+          keyboardType: isEmail ? TextInputType.emailAddress : TextInputType.text,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             hintText: placeholder.isNotEmpty ? placeholder : null,
             hintStyle: const TextStyle(color: Colors.white38),
             filled: true,
             fillColor: const Color(0xFF2A2A2A),
-            border:
-                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(8),
               borderSide: const BorderSide(color: Colors.orange, width: 2),
@@ -380,8 +357,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child:
-                Text(S.cancel, style: const TextStyle(color: Colors.white54)),
+            child: Text(S.cancel, style: const TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             autofocus: false,
@@ -390,8 +366,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
               foregroundColor: Colors.black,
             ),
             onPressed: () => Navigator.pop(ctx, ctrl.text),
-            child:
-                const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -437,53 +412,12 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
-
-    if (widget.mode == _AuthMode.fulljitflow) {
-      // Fallback: close Phase 2 screen after 45 s even if cookies never appear.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final nav = Navigator.of(context);
-        _jitTimer = Timer(const Duration(seconds: 45), () {
-          if (!_jitDone && mounted) {
-            _jitDone = true;
-            debugPrint('[BVCTV] phase2: timeout');
-            nav.pop(false);
-          }
-        });
-      });
-    }
-  }
-
-  Future<void> _saveTvCookies(String tag) async {
-    try {
-      final cm = CookieManager.instance();
-      final cookies =
-          await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
-      if (cookies.isNotEmpty) {
-        final json = jsonEncode(cookies
-            .map((c) => {
-                  'name': c.name,
-                  'value': c.value,
-                  'domain': c.domain ?? '.tv.volleyballworld.com',
-                  'path': c.path ?? '/',
-                })
-            .toList());
-        await const FlutterSecureStorage()
-            .write(key: 'tv_cookies', value: json);
-        debugPrint('$tag: saved ${cookies.length} TV cookies');
-      } else {
-        debugPrint('$tag: no TV cookies to save');
-      }
-    } catch (e) {
-      debugPrint('$tag: cookie error $e');
-    }
   }
 
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _moveTimer?.cancel();
-    _jitTimer?.cancel();
     super.dispose();
   }
 
@@ -493,141 +427,127 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
     return PopScope(
       canPop: false,
       child: Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Column(
-            children: [
-              Container(
-                color: const Color(0xFF1A1A1A),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    widget.mode == _AuthMode.fulljitflow
-                        ? S.loginTitle
-                        : S.loginTitle,
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              color: const Color(0xFF1A1A1A),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white70),
+                    onPressed: () => Navigator.of(context).pop(null),
+                  ),
+                  Text(
+                    S.loginTitle,
                     style: const TextStyle(color: Colors.white70, fontSize: 16),
                   ),
-                ),
+                ],
               ),
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (_, constraints) {
-                    _webViewSize =
-                        Size(constraints.maxWidth, constraints.maxHeight);
-                    if (_cursorX == 300 && _cursorY == 200) {
-                      _cursorX = _webViewSize.width / 2;
-                      _cursorY = _webViewSize.height / 2;
-                    }
-                    return Stack(
-                      key: _stackKey,
-                      children: [
-                        InAppWebView(
-                          initialUrlRequest:
-                              URLRequest(url: WebUri(widget.url)),
-                          initialSettings: InAppWebViewSettings(
-                            javaScriptEnabled: true,
-                            cacheMode: CacheMode.LOAD_NO_CACHE,
-                            clearCache: true,
-                            userAgent:
-                                'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-                          ),
-                          onWebViewCreated: (c) => _webController = c,
-                          onLoadStart: (_, __) =>
-                              setState(() => _loading = true),
-                          onLoadStop: (_, url) async {
-                            setState(() => _loading = false);
-                            await _webController?.evaluateJavascript(
-                                source: _initScript);
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (_, constraints) {
+                  _webViewSize = Size(constraints.maxWidth, constraints.maxHeight);
+                  if (_cursorX == 300 && _cursorY == 200) {
+                    _cursorX = _webViewSize.width / 2;
+                    _cursorY = _webViewSize.height / 2;
+                  }
+                  return Stack(
+                    key: _stackKey,
+                    children: [
+                      InAppWebView(
+                        initialUrlRequest: URLRequest(url: WebUri(widget.url)),
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          cacheMode: CacheMode.LOAD_NO_CACHE,
+                          clearCache: true,
+                          userAgent:
+                              'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                        ),
+                        onWebViewCreated: (c) => _webController = c,
+                        onLoadStart: (_, __) => setState(() => _loading = true),
+                        onLoadStop: (_, url) async {
+                          setState(() => _loading = false);
+                          await _webController?.evaluateJavascript(source: _initScript);
+                          if (_pendingCode != null) {
                             if (!mounted) return;
-
-                            if (widget.mode == _AuthMode.oidc) {
-                              // Pop as soon as the OIDC code has been captured
-                              // and api/oauth has finished setting its cookies.
-                              if (_oidcCode != null && !_oidcPopped) {
-                                _oidcPopped = true;
-                                final nav = Navigator.of(context);
-                                if (mounted) nav.pop(_oidcCode);
+                            final nav = Navigator.of(context);
+                            setState(() => _loading = true);
+                            final code = _pendingCode!;
+                            _pendingCode = null;
+                            await Future.delayed(const Duration(milliseconds: 800));
+                            // TV session cookies sichern bevor wir den WebView schließen
+                            try {
+                              final cm = CookieManager.instance();
+                              final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
+                              if (cookies.isNotEmpty) {
+                                final cookieJson = jsonEncode(cookies.map((c) => {
+                                  'name': c.name, 'value': c.value,
+                                  'domain': c.domain ?? '.tv.volleyballworld.com',
+                                  'path': c.path ?? '/',
+                                }).toList());
+                                await const FlutterSecureStorage().write(key: 'tv_cookies', value: cookieJson);
+                                debugPrint('[BVCTV] login: saved ${cookies.length} TV cookies');
+                              } else {
+                                debugPrint('[BVCTV] login: no TV cookies to save');
                               }
-                            } else {
-                              // fulljitflow mode: skip the first page load (the
-                              // player page we loaded), then watch for the
-                              // api/oauth redirect landing back on
-                              // tv.volleyballworld.com with cookies set.
-                              if (!_jitPlayerLoaded) {
-                                _jitPlayerLoaded = true;
-                              } else if ((url?.toString() ?? '')
-                                  .contains('tv.volleyballworld.com')) {
-                                final cookies = await CookieManager.instance()
-                                    .getCookies(
-                                        url: WebUri(
-                                            'https://tv.volleyballworld.com'));
-                                if (cookies.isNotEmpty && !_jitDone) {
-                                  _jitDone = true;
-                                  _jitTimer?.cancel();
-                                  final nav = Navigator.of(context);
-                                  await _saveTvCookies('[BVCTV] phase2');
-                                  if (mounted) nav.pop(true);
-                                }
-                              }
+                            } catch (e) {
+                              debugPrint('[BVCTV] login: cookie save error $e');
                             }
-                          },
-                          shouldOverrideUrlLoading:
-                              (controller, action) async {
-                            if (widget.mode == _AuthMode.oidc) {
-                              final url =
-                                  action.request.url?.toString() ?? '';
-                              if (url.startsWith(widget.redirectUri) &&
-                                  _oidcCode == null) {
-                                final code =
-                                    Uri.parse(url).queryParameters['code'];
-                                if (code != null && code.isNotEmpty) {
-                                  _oidcCode = code;
-                                }
-                              }
+                            if (mounted) nav.pop(code);
+                          }
+                        },
+                        shouldOverrideUrlLoading: (controller, action) async {
+                          final url = action.request.url?.toString() ?? '';
+                          if (url.startsWith(widget.redirectUri)) {
+                            final code = Uri.parse(url).queryParameters['code'];
+                            if (code != null && code.isNotEmpty) {
+                              _pendingCode = code;
+                              return NavigationActionPolicy.ALLOW;
                             }
                             return NavigationActionPolicy.ALLOW;
-                          },
+                          }
+                          return NavigationActionPolicy.ALLOW;
+                        },
+                      ),
+                      if (_loading)
+                        const Center(
+                          child: CircularProgressIndicator(color: Colors.orange),
                         ),
-                        if (_loading)
-                          const Center(
-                            child: CircularProgressIndicator(
-                                color: Colors.orange),
-                          ),
-                        if (isTV)
-                          Positioned(
-                            left: _cursorX,
-                            top: _cursorY,
-                            child: const IgnorePointer(
-                                child: AuthCursorWidget()),
-                          ),
-                      ],
-                    );
-                  },
-                ),
+                      if (isTV) Positioned(
+                        left: _cursorX,
+                        top: _cursorY,
+                        child: const IgnorePointer(child: _CursorWidget()),
+                      ),
+                    ],
+                  );
+                },
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
+    ),
     );
   }
 }
 
-class AuthCursorWidget extends StatelessWidget {
-  const AuthCursorWidget({super.key});
+class _CursorWidget extends StatelessWidget {
+  const _CursorWidget();
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
       size: const Size(22, 26),
-      painter: AuthCursorPainter(),
+      painter: _CursorPainter(),
     );
   }
 }
 
-class AuthCursorPainter extends CustomPainter {
+class _CursorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final path = Path()
