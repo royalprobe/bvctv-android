@@ -595,6 +595,7 @@ class _Phase2Screen extends StatefulWidget {
 class _Phase2ScreenState extends State<_Phase2Screen> {
   Timer? _timer;
   bool _phase2Done = false;
+  bool _popping = false;
 
   static String _buildCtx(String accessToken) {
     final payload = jsonEncode({
@@ -604,15 +605,42 @@ class _Phase2ScreenState extends State<_Phase2Screen> {
     return base64Url.encode(utf8.encode(payload));
   }
 
-  void _pop() {
+  Future<void> _pop() async {
+    if (_popping) return;
+    _popping = true;
     _timer?.cancel();
+    if (!_phase2Done) {
+      debugPrint('[BVCTV] phase2: timeout, checking cookies anyway');
+    }
+    await _saveCookies();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _saveCookies() async {
+    try {
+      final cm = CookieManager.instance();
+      final cookies = await cm.getCookies(
+          url: WebUri('https://tv.volleyballworld.com'));
+      if (cookies.isNotEmpty) {
+        final cookieJson = jsonEncode(cookies.map((c) => {
+              'name': c.name,
+              'value': c.value,
+              'domain': c.domain ?? '.tv.volleyballworld.com',
+              'path': c.path ?? '/',
+            }).toList());
+        await const FlutterSecureStorage()
+            .write(key: 'tv_cookies', value: cookieJson);
+        debugPrint('[BVCTV] phase2: saved ${cookies.length} TV cookies');
+      }
+    } catch (e) {
+      debugPrint('[BVCTV] phase2: cookie save error $e');
+    }
   }
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(seconds: 12), () {
+    _timer = Timer(const Duration(seconds: 15), () {
       debugPrint('[BVCTV] phase2: timeout');
       _pop();
     });
@@ -637,39 +665,41 @@ class _Phase2ScreenState extends State<_Phase2Screen> {
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            Positioned(
-              left: 0,
-              top: 0,
-              width: 1,
-              height: 1,
-              child: InAppWebView(
-                initialUrlRequest: URLRequest(url: WebUri(playerUrl)),
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  userAgent:
-                      'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-                ),
-                shouldOverrideUrlLoading: (controller, action) async {
-                  final url = action.request.url?.toString() ?? '';
-                  debugPrint('[BVCTV] phase2 nav: $url');
-                  if (url.startsWith(
-                      'https://tv.volleyballworld.com/api/oauth')) {
-                    _phase2Done = true;
-                    debugPrint('[BVCTV] phase2: api/oauth intercepted');
-                  }
-                  return NavigationActionPolicy.ALLOW;
-                },
-                onLoadStop: (controller, url) {
-                  debugPrint('[BVCTV] phase2 loadStop: $url');
-                  if (_phase2Done) {
-                    debugPrint('[BVCTV] phase2: complete, popping');
-                    _pop();
-                  }
-                },
+            // Full-size WebView so player JS runs with proper viewport
+            InAppWebView(
+              initialUrlRequest: URLRequest(url: WebUri(playerUrl)),
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                userAgent:
+                    'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
               ),
+              shouldOverrideUrlLoading: (controller, action) async {
+                final url = action.request.url?.toString() ?? '';
+                debugPrint('[BVCTV] phase2 nav: $url');
+                if (url.contains('tv.volleyballworld.com/api/oauth')) {
+                  _phase2Done = true;
+                  debugPrint('[BVCTV] phase2: api/oauth intercepted');
+                }
+                return NavigationActionPolicy.ALLOW;
+              },
+              onLoadStop: (controller, url) async {
+                final urlStr = url?.toString() ?? '';
+                debugPrint('[BVCTV] phase2 loadStop: $urlStr');
+                if (urlStr.contains('tv.volleyballworld.com/api/oauth')) {
+                  _phase2Done = true;
+                }
+                if (_phase2Done) {
+                  debugPrint('[BVCTV] phase2: complete, popping');
+                  _pop();
+                }
+              },
             ),
-            const Center(
-              child: CircularProgressIndicator(color: Colors.orange),
+            // Opaque overlay so user doesn't see the player/login page
+            Container(
+              color: Colors.black,
+              child: const Center(
+                child: CircularProgressIndicator(color: Colors.orange),
+              ),
             ),
           ],
         ),
