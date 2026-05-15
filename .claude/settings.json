@@ -165,7 +165,9 @@
       "Read(//mnt/**)",
       "Read(//c/Program Files/Android/**)",
       "PowerShell(Get-Command adb -ErrorAction SilentlyContinue; if \\(-not $?\\) { Get-ChildItem \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\" -ErrorAction SilentlyContinue })",
-      "PowerShell(python deploy_update.py -m \"Revert to v1.0.36 state \\(silent prompt=none auth\\)\")"
+      "PowerShell(python deploy_update.py -m \"Revert to v1.0.36 state \\(silent prompt=none auth\\)\")",
+      "Bash(git restore *)",
+      "PowerShell(python deploy_update.py -m \"Revert to v1.0.21 state\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

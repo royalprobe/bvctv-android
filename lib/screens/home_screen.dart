@@ -5,7 +5,6 @@ import '../l10n/app_language.dart';
 import '../l10n/strings.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'login_screen.dart';
-import 'player_screen.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -17,8 +16,6 @@ import 'dart:async';
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'dart:math';
-import 'package:crypto/crypto.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 
@@ -81,9 +78,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _preloadFocusTimer;
   WebViewController? _preloadController;
   String? _preloadedVideoId;
-  bool _bgSessionDone = false;
-  String? _silentCodeVerifier;
-  final Completer<void> _bgSessionCompleter = Completer<void>();
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -171,7 +165,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSettings();
     _loadTournamentList();
     _loadLiveAndUpcoming();
-    _restoreTvCookies();
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
@@ -261,9 +254,10 @@ class _HomeScreenState extends State<HomeScreen> {
     _preloadFocusTimer?.cancel();
     _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
       if (!mounted) return;
-      final ctx = _buildCtx();
-      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
-      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
+      final selfLink = Uri.encodeComponent(
+        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+      );
+      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
       final ctrl = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
@@ -530,111 +524,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _restoreTvCookies() async {
-    try {
-      final stored = await _storage.read(key: 'tv_cookies');
-      if (stored == null) {
-        debugPrint('[BVCTV] restore: no stored TV cookies, trying silent OAuth');
-        return;
-      }
-      final cookieList = jsonDecode(stored) as List;
-      final cm = CookieManager.instance();
-      for (final c in cookieList) {
-        await cm.setCookie(
-          url: WebUri('https://tv.volleyballworld.com'),
-          name: c['name'] as String,
-          value: c['value'] as String,
-          domain: c['domain'] as String? ?? '.tv.volleyballworld.com',
-          path: c['path'] as String? ?? '/',
-          isSecure: true,
-          isHttpOnly: true,
-          expiresDate: DateTime.now().add(const Duration(days: 30)).millisecondsSinceEpoch,
-        );
-      }
-      debugPrint('[BVCTV] restore: restored ${cookieList.length} TV cookies');
-      if (mounted) setState(() => _bgSessionDone = true);
-      if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-    } catch (e) {
-      debugPrint('[BVCTV] restore: error $e');
-    }
-  }
-
   String _buildCtx() {
     final payload = jsonEncode({
       'quick-bricky-login-flow.access_token': widget.accessToken,
       'platform': 'web',
     });
     return base64Url.encode(utf8.encode(payload));
-  }
-
-  String _generateCodeVerifier() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
-    return base64UrlEncode(bytes).replaceAll('=', '');
-  }
-
-  String _generateCodeChallenge(String verifier) {
-    final digest = sha256.convert(utf8.encode(verifier));
-    return base64UrlEncode(digest.bytes).replaceAll('=', '');
-  }
-
-  String _buildSilentAuthUrl() {
-    _silentCodeVerifier = _generateCodeVerifier();
-    return Uri.parse('https://signin.volleyballworld.com/service/oidc/vbtv-web/authorize').replace(
-      queryParameters: {
-        'response_type': 'code',
-        'client_id': '93d30c71-8a06-46c3-a288-dfb48f082313',
-        'redirect_uri': 'https://tv.volleyballworld.com/api/oauth',
-        'scope': 'openid email profile',
-        'code_challenge': _generateCodeChallenge(_silentCodeVerifier!),
-        'code_challenge_method': 'S256',
-        'prompt': 'none',
-      },
-    ).toString();
-  }
-
-  String? _findVideoUrl(dynamic obj) {
-    if (obj is String) {
-      if ((obj.contains('.m3u8') || obj.contains('manifest')) && obj.startsWith('https')) return obj;
-      return null;
-    }
-    if (obj is Map) {
-      for (final key in ['file', 'url', 'src', 'link', 'stream', 'videoUrl']) {
-        final val = obj[key];
-        if (val is String && val.startsWith('https') && (val.contains('.m3u8') || val.contains('manifest'))) {
-          return val;
-        }
-      }
-      for (final val in obj.values) {
-        final found = _findVideoUrl(val);
-        if (found != null) return found;
-      }
-    }
-    if (obj is List) {
-      for (final item in obj) {
-        final found = _findVideoUrl(item);
-        if (found != null) return found;
-      }
-    }
-    return null;
-  }
-
-  Future<String?> _fetchStreamUrl(String videoId) async {
-    try {
-      final ctx = _buildCtx();
-      final res = await http.get(
-        Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$videoId?ctx=$ctx'),
-        headers: {'Origin': 'https://tv.volleyballworld.com'},
-      ).timeout(const Duration(seconds: 10));
-      debugPrint('[BVCTV] media status=${res.statusCode} body100=${res.body.substring(0, res.body.length.clamp(0, 300))}');
-      if (res.statusCode != 200) return null;
-      final data = jsonDecode(res.body);
-      if (data is Map) debugPrint('[BVCTV] top-level keys: ${data.keys.toList()}');
-      return _findVideoUrl(data);
-    } catch (e) {
-      debugPrint('[BVCTV] fetchStreamUrl error: $e');
-      return null;
-    }
   }
 
   String _extractThumbnail(dynamic item) {
@@ -1001,37 +896,20 @@ class _HomeScreenState extends State<HomeScreen> {
     _launchPlayer(video, seekToLive: false);
   }
 
-  void _launchPlayer(VideoItem video, {required bool seekToLive}) async {
-    // Warten bis Session-Cookies bereit sind (max. 6s)
-    if (!_bgSessionDone) {
-      await _bgSessionCompleter.future.timeout(
-        const Duration(seconds: 6),
-        onTimeout: () {},
-      );
-      if (!mounted) return;
-    }
-    final streamUrl = await _fetchStreamUrl(video.id);
-    if (!mounted) return;
-
-    if (streamUrl != null) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => PlayerScreen(title: video.teams, streamUrl: streamUrl),
-      ));
-    } else {
-      final ctx = _buildCtx();
-      final selfLink = Uri.encodeComponent('https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?ctx=$ctx');
-      final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink';
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => WebViewPlayerScreen(
-          title: video.teams,
-          playerUrl: playerUrl,
-          accessToken: widget.accessToken,
-          useRealDuration: !_twoHourMode,
-          seekToLive: seekToLive,
-          isLive: video.isLive,
-        ),
-      ));
-    }
+  void _launchPlayer(VideoItem video, {required bool seekToLive}) {
+    final selfLink = Uri.encodeComponent(
+      'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+    );
+    final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => WebViewPlayerScreen(
+        title: video.teams,
+        playerUrl: playerUrl,
+        useRealDuration: !_twoHourMode,
+        seekToLive: seekToLive,
+        isLive: video.isLive,
+      ),
+    ));
   }
 
   void _showLiveDialog(VideoItem video) {
@@ -1423,38 +1301,6 @@ class _HomeScreenState extends State<HomeScreen> {
             left: 0, top: 0,
             width: 1, height: 1,
             child: WebViewWidget(controller: _preloadController!),
-          ),
-        // Silent OAuth: etabliert server-side Session-Cookies auf tv.volleyballworld.com
-        if (!_bgSessionDone)
-          Positioned(
-            left: 0, top: 0, width: 1, height: 1,
-            child: InAppWebView(
-              initialUrlRequest: URLRequest(
-                url: WebUri(_buildSilentAuthUrl()),
-              ),
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                userAgent: 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-              ),
-              shouldOverrideUrlLoading: (controller, action) async {
-                final url = action.request.url?.toString() ?? '';
-                debugPrint('[BVCTV] bgSession nav: $url');
-                return NavigationActionPolicy.ALLOW;
-              },
-              onLoadStop: (controller, url) async {
-                final urlStr = url?.toString() ?? '';
-                debugPrint('[BVCTV] bgSession loaded: $urlStr');
-                if (urlStr.contains('tv.volleyballworld.com')) {
-                  if (mounted) setState(() => _bgSessionDone = true);
-                  if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-                }
-              },
-              onReceivedError: (controller, request, error) {
-                debugPrint('[BVCTV] bgSession error: ${error.description} url=${request.url}');
-                if (mounted) setState(() => _bgSessionDone = true);
-                if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
-              },
-            ),
           ),
       ]),
       ),
@@ -1975,11 +1821,10 @@ class _CountrySearchSheet extends StatelessWidget {
 class WebViewPlayerScreen extends StatefulWidget {
   final String title;
   final String playerUrl;
-  final String accessToken;
   final bool useRealDuration;
   final bool seekToLive;
   final bool isLive;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, required this.accessToken, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
+  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
 
   @override
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
@@ -1989,7 +1834,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   WebViewController? _controller;
   InAppWebViewController? _inAppController;
 
-  bool get _useInAppWebView => !kIsWeb && (Platform.isAndroid || Platform.isWindows);
+  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
 
   void _runJs(String js) {
     if (_useInAppWebView) {
@@ -2024,9 +1869,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _isInBlackScreen = false;
   bool _showControls = true;
   bool _playerReady = false;
-  bool _isOnAuthPage = false;
   bool _isTV = false;
-  bool _skipSilentAuth = false;
   String _debugMsg = '';
 
   @override
@@ -2102,34 +1945,19 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
       ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
       ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (url) {
-          final isAuth = !url.contains('volleyballworld.com') && !url.contains('zapp-5434');
-          if (mounted && _isOnAuthPage != isAuth) {
-            setState(() {
-              _isOnAuthPage = isAuth;
-              if (!isAuth) _playerReady = false;
-            });
-          }
-          // Access-Token in localStorage setzen bevor die Seite ihren Auth-Check macht
-          if (!isAuth) {
-            final token = widget.accessToken.replaceAll('"', '\\"');
-            _runJs('try{localStorage.setItem("quick-bricky-login-flow.access_token","$token");}catch(e){}');
-          }
+        onPageStarted: (_) {
           _runJs(r'''
             (function() {
               if (window._qualityPatched) return;
               window._qualityPatched = true;
 
-              if (window.location.hostname === 'tv.volleyballworld.com' ||
-                  window.location.hostname.indexOf('zapp-5434') >= 0) {
-                try {
-                  Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
-                  Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
-                  Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
-                  Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
-                  Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
-                } catch(e) {}
-              }
+              try {
+                Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
+                Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
+                Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
+                Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
+                Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
+              } catch(e) {}
 
               function _filterM3u8(t) {
                 if (t.indexOf('#EXT-X-STREAM-INF') < 0) return t;
@@ -2202,7 +2030,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           _onPageFinished();
           // Fallback: nur wenn ready-Event und play-Event nie kommen
           Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && !_playerReady && !_isOnAuthPage) {
+            if (mounted && !_playerReady) {
               setState(() { _playerReady = true; _isPlaying = true; });
               _startHideControlsTimer();
               _startPositionPolling();
@@ -2258,8 +2086,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   void _onPageFinished() {
     _runJs('''
-      (function(){
-      if(window.location.href.indexOf('volleyballworld.com')<0&&window.location.href.indexOf('zapp-5434')<0)return;
       window._flutterPaused = false;
 
       // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
@@ -2525,7 +2351,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           return false;
         }
       }, true);
-      })();
     ''');
   }
 
@@ -2809,8 +2634,8 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               )),
             )),
 
-          // Schwarze Abdeckung bis Player bereit ist (nicht auf Auth-Seiten)
-          if (!_playerReady && !_isOnAuthPage)
+          // Schwarze Abdeckung bis Player bereit ist
+          if (!_playerReady)
             Positioned.fill(child: Container(
               color: Colors.black,
               child: const Center(child: CircularProgressIndicator(color: Colors.orange)),
@@ -2826,7 +2651,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
           // Vollflächige Touch-Overlay: links=zurück, rechts=vor
           // Erster Tap blendet Controls ein, erst weiterer Tap seeked
-          if (_playerReady && !_isOnAuthPage)
+          if (_playerReady)
             Positioned.fill(child: Row(children: [
               Expanded(child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -2867,7 +2692,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           )),
 
           // Controls ein/ausblenden per Tap auf die Mitte (wo keine Seek-Bereiche sind)
-          if (_showControls && !_isOnAuthPage) _buildControls(),
+          if (_showControls) _buildControls(),
         ]),
       ),
     );
@@ -2875,23 +2700,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   Widget _buildWebViewWidget() {
     if (_useInAppWebView) {
-      final tokenEscaped = widget.accessToken.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
       return InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.playerUrl)),
         initialUserScripts: UnmodifiableListView([
           UserScript(
             source: '''
-              (function() {
-                // Token vor jeder Seiten-JS setzen – verhindert client-seitige Umleitung
-                try {
-                  localStorage.setItem("quick-bricky-login-flow.access_token", "$tokenEscaped");
-                } catch(e) {}
-                window.FlutterChannel = {
-                  postMessage: function(msg) {
-                    try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
-                  }
-                };
-              })();
+              window.FlutterChannel = {
+                postMessage: function(msg) {
+                  try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
+                }
+              };
             ''',
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
           ),
@@ -2911,63 +2729,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             },
           );
         },
-        shouldOverrideUrlLoading: (controller, action) async {
-          final url = action.request.url?.toString() ?? '';
-          debugPrint('[BVCTV] player nav: $url');
-
-          // OAuth-Callback von tv.volleyballworld.com
-          if (url.startsWith('https://tv.volleyballworld.com/api/oauth')) {
-            if (url.contains('code=')) {
-              // Erfolg: Session-Cookies werden serverseitig gesetzt
-              debugPrint('[BVCTV] player: stille Auth erfolgreich, lade Player neu');
-              Future.delayed(const Duration(milliseconds: 2500), () {
-                if (mounted) {
-                  setState(() { _isOnAuthPage = false; _playerReady = false; _skipSilentAuth = false; });
-                  _loadUrl(widget.playerUrl);
-                }
-              });
-            } else if (url.contains('error=')) {
-              // SSO-Session abgelaufen → Anmeldung im Player-Fenster nötig
-              debugPrint('[BVCTV] player: stille Auth fehlgeschlagen, zeige Login');
-              if (mounted) setState(() => _skipSilentAuth = true);
-              // Player neu laden → Weiterleitung zu signin → diesmal ALLOW
-              Future.delayed(const Duration(milliseconds: 100), () {
-                if (mounted) _loadUrl(widget.playerUrl);
-              });
-              return NavigationActionPolicy.CANCEL;
-            }
-            return NavigationActionPolicy.ALLOW;
-          }
-
-          // Signin-Umleitung abfangen und prompt=none versuchen
-          if (url.contains('signin.volleyballworld.com')) {
-            if (!_skipSilentAuth && !url.contains('prompt=none')) {
-              debugPrint('[BVCTV] player: versuche stille Auth (prompt=none)');
-              final sep = url.contains('?') ? '&' : '?';
-              controller.loadUrl(urlRequest: URLRequest(url: WebUri('$url${sep}prompt=none')));
-              return NavigationActionPolicy.CANCEL;
-            }
-            // prompt=none hat nicht geklappt oder Login-Seite wurde bewusst angezeigt
-            if (_skipSilentAuth) setState(() => _skipSilentAuth = false);
-          }
-
-          return NavigationActionPolicy.ALLOW;
-        },
-        onLoadStart: (controller, url) {
-          final urlStr = url?.toString() ?? '';
-          final isAuth = urlStr.contains('signin.volleyballworld.com') ||
-              (!urlStr.contains('tv.volleyballworld.com') && !urlStr.contains('zapp-5434'));
-          if (mounted && _isOnAuthPage != isAuth) {
-            setState(() {
-              _isOnAuthPage = isAuth;
-              if (!isAuth) _playerReady = false;
-            });
-          }
-        },
         onLoadStop: (controller, url) {
           _onPageFinished();
           Future.delayed(const Duration(seconds: 4), () {
-            if (mounted && !_playerReady && !_isOnAuthPage) {
+            if (mounted && !_playerReady) {
               setState(() { _playerReady = true; _isPlaying = true; });
               _startHideControlsTimer();
               _startPositionPolling();

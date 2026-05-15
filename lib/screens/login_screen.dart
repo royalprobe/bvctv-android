@@ -165,8 +165,6 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
-  String? _pendingCode;
-  bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
 
   double _cursorX = 300;
@@ -231,7 +229,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 ''';
 
   bool _handleKeyEvent(KeyEvent event) {
-    if (_dialogShowing) return false;
     final key = event.logicalKey;
     final isDpad = key == LogicalKeyboardKey.arrowUp ||
         key == LogicalKeyboardKey.arrowDown ||
@@ -322,7 +319,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 
   Future<String?> _showTextInputDialog(
       String value, String type, String placeholder) {
-    _dialogShowing = true;
     final ctrl = TextEditingController(text: value);
     final isPassword = type == 'password';
     final isEmail = type == 'email';
@@ -370,7 +366,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           ),
         ],
       ),
-    ).whenComplete(() => _dialogShowing = false);
+    );
   }
 
   void _ensureTimer() {
@@ -423,10 +419,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isTV = MediaQuery.of(context).size.shortestSide > 450;
-    return PopScope(
-      canPop: false,
-      child: Scaffold(
+    return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
@@ -469,44 +462,18 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         ),
                         onWebViewCreated: (c) => _webController = c,
                         onLoadStart: (_, __) => setState(() => _loading = true),
-                        onLoadStop: (_, url) async {
+                        onLoadStop: (_, __) async {
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
-                          if (_pendingCode != null) {
-                            if (!mounted) return;
-                            final nav = Navigator.of(context);
-                            setState(() => _loading = true);
-                            final code = _pendingCode!;
-                            _pendingCode = null;
-                            await Future.delayed(const Duration(milliseconds: 800));
-                            // TV session cookies sichern bevor wir den WebView schließen
-                            try {
-                              final cm = CookieManager.instance();
-                              final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
-                              if (cookies.isNotEmpty) {
-                                final cookieJson = jsonEncode(cookies.map((c) => {
-                                  'name': c.name, 'value': c.value,
-                                  'domain': c.domain ?? '.tv.volleyballworld.com',
-                                  'path': c.path ?? '/',
-                                }).toList());
-                                await const FlutterSecureStorage().write(key: 'tv_cookies', value: cookieJson);
-                                debugPrint('[BVCTV] login: saved ${cookies.length} TV cookies');
-                              } else {
-                                debugPrint('[BVCTV] login: no TV cookies to save');
-                              }
-                            } catch (e) {
-                              debugPrint('[BVCTV] login: cookie save error $e');
-                            }
-                            if (mounted) nav.pop(code);
-                          }
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
                           if (url.startsWith(widget.redirectUri)) {
                             final code = Uri.parse(url).queryParameters['code'];
+                            // Nur poppen wenn ein code vorhanden ist — Zwischenschritte ignorieren
                             if (code != null && code.isNotEmpty) {
-                              _pendingCode = code;
-                              return NavigationActionPolicy.ALLOW;
+                              if (mounted) Navigator.of(context).pop(code);
+                              return NavigationActionPolicy.CANCEL;
                             }
                             return NavigationActionPolicy.ALLOW;
                           }
@@ -517,7 +484,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         const Center(
                           child: CircularProgressIndicator(color: Colors.orange),
                         ),
-                      if (isTV) Positioned(
+                      Positioned(
                         left: _cursorX,
                         top: _cursorY,
                         child: const IgnorePointer(child: _CursorWidget()),
@@ -530,7 +497,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           ],
         ),
       ),
-    ),
     );
   }
 }
