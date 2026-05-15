@@ -123,9 +123,9 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: _errorMessage != null
-            ? Column(
+      body: _errorMessage != null
+          ? Center(
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
@@ -145,9 +145,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     label: Text(S.retryLogin),
                   ),
                 ],
-              )
-            : const CircularProgressIndicator(color: Colors.orange),
-      ),
+              ),
+            )
+          : const SizedBox.shrink(),
     );
   }
 }
@@ -165,13 +165,14 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
-  String? _pendingCode;
   bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
 
   // Phase 2: fulljitflow inside the same WebView, before code exchange
-  String? _oidcCode;      // OIDC auth code from Phase 1
+  String? _oidcCode;           // OIDC auth code from Phase 1
   bool _phase2Active = false;
+  bool _phase2PlayerLoaded = false; // skip first onLoadStop (player page itself)
+  bool _phase2Popped = false;
   Timer? _phase2Timer;
 
   double _cursorX = 300;
@@ -506,14 +507,11 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                             final nav = Navigator.of(context);
                             setState(() => _loading = true);
                             await Future.delayed(const Duration(milliseconds: 400));
-                            // Save interim cookies from Phase 1
                             await _saveTvCookies('[BVCTV] login p1');
-                            // Delete them so the player page MUST trigger fulljitflow
                             try {
                               await CookieManager.instance().deleteCookies(
                                   url: WebUri('https://tv.volleyballworld.com'));
                             } catch (_) {}
-                            // Navigate to player page to trigger fulljitflow
                             await _webController?.loadUrl(
                               urlRequest: URLRequest(
                                 url: WebUri(
@@ -522,33 +520,40 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                                 ),
                               ),
                             );
-                            // Fallback: pop with OIDC code after 25 s if fulljitflow never fires
+                            // Fallback: pop with OIDC code after 25 s
                             _phase2Timer = Timer(const Duration(seconds: 25), () {
                               debugPrint('[BVCTV] login p2: timeout');
-                              if (mounted) nav.pop(_oidcCode);
+                              if (!_phase2Popped && mounted) {
+                                _phase2Popped = true;
+                                nav.pop(_oidcCode);
+                              }
                             });
-                          } else if (_pendingCode != null) {
-                            // Phase 2 fulljitflow done → save cookies and pop
-                            _phase2Timer?.cancel();
-                            final nav = Navigator.of(context);
-                            final code = _pendingCode!;
-                            _pendingCode = null;
-                            setState(() => _loading = true);
-                            await Future.delayed(const Duration(milliseconds: 800));
-                            await _saveTvCookies('[BVCTV] login p2');
-                            if (mounted) nav.pop(code);
+                          } else if (_phase2Active) {
+                            // Phase 2 in progress: detect fulljitflow completion via cookies.
+                            // shouldOverrideUrlLoading doesn't fire for 302 redirects, so we
+                            // check cookies instead: api/oauth sets tv.volleyballworld.com
+                            // session cookies before 302-ing back to that domain.
+                            if (!_phase2PlayerLoaded) {
+                              _phase2PlayerLoaded = true; // skip first load (player page)
+                            } else if ((url?.toString() ?? '').contains('tv.volleyballworld.com')) {
+                              final cookies = await CookieManager.instance()
+                                  .getCookies(url: WebUri('https://tv.volleyballworld.com'));
+                              if (cookies.isNotEmpty && !_phase2Popped) {
+                                _phase2Popped = true;
+                                _phase2Timer?.cancel();
+                                final nav = Navigator.of(context);
+                                await _saveTvCookies('[BVCTV] login p2');
+                                if (mounted) nav.pop(_oidcCode);
+                              }
+                            }
                           }
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
-                          if (url.startsWith(widget.redirectUri)) {
+                          if (url.startsWith(widget.redirectUri) && _oidcCode == null) {
                             final code = Uri.parse(url).queryParameters['code'];
                             if (code != null && code.isNotEmpty) {
-                              if (_oidcCode == null) {
-                                _oidcCode = code; // Phase 1: OIDC code
-                              } else {
-                                _pendingCode = _oidcCode; // Phase 2: fulljitflow done
-                              }
+                              _oidcCode = code; // Phase 1: capture OIDC code
                             }
                           }
                           return NavigationActionPolicy.ALLOW;
