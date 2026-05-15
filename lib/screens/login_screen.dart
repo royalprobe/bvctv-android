@@ -460,18 +460,13 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           children: [
             Container(
               color: const Color(0xFF1A1A1A),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white70),
-                    onPressed: () => Navigator.of(context).pop(null),
-                  ),
-                  Text(
-                    S.loginTitle,
-                    style: const TextStyle(color: Colors.white70, fontSize: 16),
-                  ),
-                ],
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  S.loginTitle,
+                  style: const TextStyle(color: Colors.white70, fontSize: 16),
+                ),
               ),
             ),
             Expanded(
