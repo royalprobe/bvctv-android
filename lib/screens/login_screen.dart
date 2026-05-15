@@ -165,10 +165,7 @@ class _AuthWebViewScreen extends StatefulWidget {
 class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
-  String? _oidcCode;
-  bool _phase2Started = false;
-  bool _phase2Done = false;
-  Timer? _phase2Timer;
+  String? _pendingCode;
   bool _dialogShowing = false;
   final GlobalKey _stackKey = GlobalKey();
 
@@ -421,7 +418,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _moveTimer?.cancel();
-    _phase2Timer?.cancel();
     super.dispose();
   }
 
@@ -472,70 +468,56 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                               'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                         ),
                         onWebViewCreated: (c) => _webController = c,
-                        onLoadStart: (_, __) {
-                          if (!_phase2Started) setState(() => _loading = true);
-                        },
+                        onLoadStart: (_, __) => setState(() => _loading = true),
                         onLoadStop: (_, url) async {
-                          if (!_phase2Started) setState(() => _loading = false);
-                          final nav = Navigator.of(context);
+                          setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
-                          if (_phase2Done) {
-                            _phase2Timer?.cancel();
-                            if (mounted) nav.pop(_oidcCode);
-                            return;
-                          }
-                          if (_oidcCode != null && !_phase2Started) {
-                            _phase2Started = true;
+                          if (_pendingCode != null) {
+                            if (!mounted) return;
+                            final nav = Navigator.of(context);
                             setState(() => _loading = true);
-                            _phase2Timer = Timer(const Duration(seconds: 15), () {
-                              if (mounted) {
-                                debugPrint('[BVCTV] login: Phase 2 timeout, continuing');
-                                nav.pop(_oidcCode);
+                            final code = _pendingCode!;
+                            _pendingCode = null;
+                            await Future.delayed(const Duration(milliseconds: 800));
+                            // TV session cookies sichern bevor wir den WebView schließen
+                            try {
+                              final cm = CookieManager.instance();
+                              final cookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
+                              if (cookies.isNotEmpty) {
+                                final cookieJson = jsonEncode(cookies.map((c) => {
+                                  'name': c.name, 'value': c.value,
+                                  'domain': c.domain ?? '.tv.volleyballworld.com',
+                                  'path': c.path ?? '/',
+                                }).toList());
+                                await const FlutterSecureStorage().write(key: 'tv_cookies', value: cookieJson);
+                                debugPrint('[BVCTV] login: saved ${cookies.length} TV cookies');
+                              } else {
+                                debugPrint('[BVCTV] login: no TV cookies to save');
                               }
-                            });
-                            final selfLink = Uri.encodeComponent(
-                                'https://zapp-5434-volleyball-tv.web.app/jw/media/rqgkYjJX');
-                            debugPrint('[BVCTV] login: starting Phase 2 (player fulljitflow)');
-                            await _webController?.loadUrl(
-                              urlRequest: URLRequest(url: WebUri(
-                                  'https://tv.volleyballworld.com/player?self-link=$selfLink')),
-                            );
+                            } catch (e) {
+                              debugPrint('[BVCTV] login: cookie save error $e');
+                            }
+                            if (mounted) nav.pop(code);
                           }
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
                           if (url.startsWith(widget.redirectUri)) {
-                            final uri = Uri.parse(url);
-                            final code = uri.queryParameters['code'];
-                            final state = uri.queryParameters['state'] ?? '';
+                            final code = Uri.parse(url).queryParameters['code'];
                             if (code != null && code.isNotEmpty) {
-                              if (state.startsWith('eyJ')) {
-                                _phase2Done = true;
-                                debugPrint('[BVCTV] login: Phase 2 code received (fulljitflow)');
-                              } else if (_oidcCode == null) {
-                                _oidcCode = code;
-                                debugPrint('[BVCTV] login: Phase 1 OIDC code received');
-                              }
+                              _pendingCode = code;
+                              return NavigationActionPolicy.ALLOW;
                             }
                             return NavigationActionPolicy.ALLOW;
                           }
                           return NavigationActionPolicy.ALLOW;
                         },
                       ),
-                      if (_phase2Started && !_phase2Done)
-                        Positioned.fill(
-                          child: Container(
-                            color: Colors.black,
-                            child: const Center(
-                              child: CircularProgressIndicator(color: Colors.orange),
-                            ),
-                          ),
-                        )
-                      else if (_loading)
+                      if (_loading)
                         const Center(
                           child: CircularProgressIndicator(color: Colors.orange),
                         ),
-                      if (isTV && !_phase2Started) Positioned(
+                      if (isTV) Positioned(
                         left: _cursorX,
                         top: _cursorY,
                         child: const IgnorePointer(child: _CursorWidget()),

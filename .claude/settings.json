@@ -140,7 +140,8 @@
       "Bash(Write-Host \"Copied\")",
       "PowerShell(gh release create v1.0.38 \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk#app-release.apk\" --title \"v1.0.38\" --notes \"2-phase login: OIDC login now also completes the fulljitflow media session silently, so videos open without a second login prompt.\")",
       "Bash(where gh *)",
-      "Read(//usr/local/bin/**)"
+      "Read(//usr/local/bin/**)",
+      "Bash(git checkout *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

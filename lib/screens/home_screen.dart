@@ -17,6 +17,8 @@ import 'dart:async';
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:math';
+import 'package:crypto/crypto.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 
@@ -79,6 +81,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _preloadFocusTimer;
   WebViewController? _preloadController;
   String? _preloadedVideoId;
+  bool _bgSessionDone = false;
+  String? _silentCodeVerifier;
+  final Completer<void> _bgSessionCompleter = Completer<void>();
   bool _isLoading = true;
   String? _errorMessage;
   int _videosLoadEpoch = 0;
@@ -166,6 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSettings();
     _loadTournamentList();
     _loadLiveAndUpcoming();
+    _restoreTvCookies();
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
@@ -524,12 +530,67 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _restoreTvCookies() async {
+    try {
+      final stored = await _storage.read(key: 'tv_cookies');
+      if (stored == null) {
+        debugPrint('[BVCTV] restore: no stored TV cookies, trying silent OAuth');
+        return;
+      }
+      final cookieList = jsonDecode(stored) as List;
+      final cm = CookieManager.instance();
+      for (final c in cookieList) {
+        await cm.setCookie(
+          url: WebUri('https://tv.volleyballworld.com'),
+          name: c['name'] as String,
+          value: c['value'] as String,
+          domain: c['domain'] as String? ?? '.tv.volleyballworld.com',
+          path: c['path'] as String? ?? '/',
+          isSecure: true,
+          isHttpOnly: true,
+          expiresDate: DateTime.now().add(const Duration(days: 30)).millisecondsSinceEpoch,
+        );
+      }
+      debugPrint('[BVCTV] restore: restored ${cookieList.length} TV cookies');
+      if (mounted) setState(() => _bgSessionDone = true);
+      if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
+    } catch (e) {
+      debugPrint('[BVCTV] restore: error $e');
+    }
+  }
+
   String _buildCtx() {
     final payload = jsonEncode({
       'quick-bricky-login-flow.access_token': widget.accessToken,
       'platform': 'web',
     });
     return base64Url.encode(utf8.encode(payload));
+  }
+
+  String _generateCodeVerifier() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  String _generateCodeChallenge(String verifier) {
+    final digest = sha256.convert(utf8.encode(verifier));
+    return base64UrlEncode(digest.bytes).replaceAll('=', '');
+  }
+
+  String _buildSilentAuthUrl() {
+    _silentCodeVerifier = _generateCodeVerifier();
+    return Uri.parse('https://signin.volleyballworld.com/service/oidc/vbtv-web/authorize').replace(
+      queryParameters: {
+        'response_type': 'code',
+        'client_id': '93d30c71-8a06-46c3-a288-dfb48f082313',
+        'redirect_uri': 'https://tv.volleyballworld.com/api/oauth',
+        'scope': 'openid email profile',
+        'code_challenge': _generateCodeChallenge(_silentCodeVerifier!),
+        'code_challenge_method': 'S256',
+        'prompt': 'none',
+      },
+    ).toString();
   }
 
   String? _findVideoUrl(dynamic obj) {
@@ -941,6 +1002,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _launchPlayer(VideoItem video, {required bool seekToLive}) async {
+    // Warten bis Session-Cookies bereit sind (max. 6s)
+    if (!_bgSessionDone) {
+      await _bgSessionCompleter.future.timeout(
+        const Duration(seconds: 6),
+        onTimeout: () {},
+      );
+      if (!mounted) return;
+    }
     final streamUrl = await _fetchStreamUrl(video.id);
     if (!mounted) return;
 
@@ -1354,6 +1423,38 @@ class _HomeScreenState extends State<HomeScreen> {
             left: 0, top: 0,
             width: 1, height: 1,
             child: WebViewWidget(controller: _preloadController!),
+          ),
+        // Silent OAuth: etabliert server-side Session-Cookies auf tv.volleyballworld.com
+        if (!_bgSessionDone)
+          Positioned(
+            left: 0, top: 0, width: 1, height: 1,
+            child: InAppWebView(
+              initialUrlRequest: URLRequest(
+                url: WebUri(_buildSilentAuthUrl()),
+              ),
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                userAgent: 'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+              ),
+              shouldOverrideUrlLoading: (controller, action) async {
+                final url = action.request.url?.toString() ?? '';
+                debugPrint('[BVCTV] bgSession nav: $url');
+                return NavigationActionPolicy.ALLOW;
+              },
+              onLoadStop: (controller, url) async {
+                final urlStr = url?.toString() ?? '';
+                debugPrint('[BVCTV] bgSession loaded: $urlStr');
+                if (urlStr.contains('tv.volleyballworld.com')) {
+                  if (mounted) setState(() => _bgSessionDone = true);
+                  if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
+                }
+              },
+              onReceivedError: (controller, request, error) {
+                debugPrint('[BVCTV] bgSession error: ${error.description} url=${request.url}');
+                if (mounted) setState(() => _bgSessionDone = true);
+                if (!_bgSessionCompleter.isCompleted) _bgSessionCompleter.complete();
+              },
+            ),
           ),
       ]),
       ),
@@ -2813,9 +2914,12 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         shouldOverrideUrlLoading: (controller, action) async {
           final url = action.request.url?.toString() ?? '';
           debugPrint('[BVCTV] player nav: $url');
+
+          // OAuth-Callback von tv.volleyballworld.com
           if (url.startsWith('https://tv.volleyballworld.com/api/oauth')) {
             if (url.contains('code=')) {
-              debugPrint('[BVCTV] player: auth ok, reloading player');
+              // Erfolg: Session-Cookies werden serverseitig gesetzt
+              debugPrint('[BVCTV] player: stille Auth erfolgreich, lade Player neu');
               Future.delayed(const Duration(milliseconds: 2500), () {
                 if (mounted) {
                   setState(() { _isOnAuthPage = false; _playerReady = false; _skipSilentAuth = false; });
@@ -2823,8 +2927,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 }
               });
             } else if (url.contains('error=')) {
-              debugPrint('[BVCTV] player: silent auth failed, showing login');
+              // SSO-Session abgelaufen → Anmeldung im Player-Fenster nötig
+              debugPrint('[BVCTV] player: stille Auth fehlgeschlagen, zeige Login');
               if (mounted) setState(() => _skipSilentAuth = true);
+              // Player neu laden → Weiterleitung zu signin → diesmal ALLOW
               Future.delayed(const Duration(milliseconds: 100), () {
                 if (mounted) _loadUrl(widget.playerUrl);
               });
@@ -2832,15 +2938,19 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             }
             return NavigationActionPolicy.ALLOW;
           }
+
+          // Signin-Umleitung abfangen und prompt=none versuchen
           if (url.contains('signin.volleyballworld.com')) {
             if (!_skipSilentAuth && !url.contains('prompt=none')) {
-              debugPrint('[BVCTV] player: trying silent auth (prompt=none)');
+              debugPrint('[BVCTV] player: versuche stille Auth (prompt=none)');
               final sep = url.contains('?') ? '&' : '?';
               controller.loadUrl(urlRequest: URLRequest(url: WebUri('$url${sep}prompt=none')));
               return NavigationActionPolicy.CANCEL;
             }
+            // prompt=none hat nicht geklappt oder Login-Seite wurde bewusst angezeigt
             if (_skipSilentAuth) setState(() => _skipSilentAuth = false);
           }
+
           return NavigationActionPolicy.ALLOW;
         },
         onLoadStart: (controller, url) {
