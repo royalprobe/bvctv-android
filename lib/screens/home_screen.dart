@@ -2734,6 +2734,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         ),
         onWebViewCreated: (controller) {
           _inAppController = controller;
+          debugPrint('[bvctv-player] created. tokenLen=${widget.accessToken.length} url=${widget.playerUrl}');
           controller.addJavaScriptHandler(
             handlerName: 'FlutterChannel',
             callback: (args) {
@@ -2741,7 +2742,20 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             },
           );
         },
-        onLoadStop: (controller, url) {
+        onLoadStart: (_, url) {
+          debugPrint('[bvctv-player] onLoadStart: $url');
+        },
+        onConsoleMessage: (_, msg) {
+          debugPrint('[bvctv-player] console.${msg.messageLevel}: ${msg.message}');
+        },
+        shouldOverrideUrlLoading: (_, action) async {
+          debugPrint('[bvctv-player] nav: ${action.request.url}');
+          return NavigationActionPolicy.ALLOW;
+        },
+        onLoadStop: (controller, url) async {
+          debugPrint('[bvctv-player] onLoadStop: $url');
+          final ls = await controller.evaluateJavascript(source: 'JSON.stringify(Object.keys(localStorage))');
+          debugPrint('[bvctv-player] localStorage keys: $ls');
           _onPageFinished();
           Future.delayed(const Duration(seconds: 4), () {
             if (mounted && !_playerReady) {
