@@ -702,9 +702,23 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      final results = (await Future.wait(cgPlaylistIds.map(fetchTitle)))
-          .whereType<Map<String, String>>()
-          .toList();
+      // Reguläre Turniere UND YouTube-Playlists parallel laden
+      final realTournamentsF = Future.wait(cgPlaylistIds.map(fetchTitle))
+          .then((r) => r.whereType<Map<String, String>>().toList());
+      final youtubeTournamentsF = Future.wait(_youtubePlaylistIds.map((pid) async {
+        final data = await _fetchYoutubePlaylist(pid);
+        if (data == null) return null;
+        _youtubeCache[pid] = data;
+        return <String, String>{
+          'id': '__yt_$pid',
+          'title': data['title'] as String,
+          'matchDate': data['sortDate'] as String,
+        };
+      })).then((r) => r.whereType<Map<String, String>>().toList());
+
+      final realTournaments = await realTournamentsF;
+      final youtubeTournaments = await youtubeTournamentsF;
+      final results = [...realTournaments, ...youtubeTournaments];
 
       // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
       int titleYear(String t) {
@@ -740,6 +754,72 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   static const _allId = '__all__';
+
+  // YouTube-Playlists werden als eigene Turniere ohne API-Key via RSS-Feed geladen
+  // (https://www.youtube.com/feeds/videos.xml?playlist_id=...). Klick öffnet YouTube App.
+  static const List<String> _youtubePlaylistIds = [
+    'PLQUMXo3n8RdbkhsBbZIJE2Xm9iwe7oHW6',
+    'PLQUMXo3n8RdaxKFvodbdAEdF7RDz9g37O',
+    'PLQUMXo3n8Rdbne15axkZXDNnksOVVE6CB',
+    'PLQUMXo3n8RdaWp2OaQCbl_4HjzD7HyANE',
+  ];
+
+  // Cache der RSS-Ergebnisse (Title + Latest-Date + Entries)
+  // Befüllt in _loadTournamentList, gelesen in _loadVideos.
+  final Map<String, Map<String, dynamic>> _youtubeCache = {};
+
+  static String _decodeXmlEntities(String s) {
+    return s
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'");
+  }
+
+  Future<Map<String, dynamic>?> _fetchYoutubePlaylist(String playlistId) async {
+    try {
+      final res = await http
+          .get(Uri.parse('https://www.youtube.com/feeds/videos.xml?playlist_id=$playlistId'))
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return null;
+      final body = res.body;
+
+      // Playlist-Titel: erstes <title> AUSSERHALB einer <entry>
+      final feedTitleMatch =
+          RegExp(r'</yt:channelId>\s*<title>([^<]*)</title>', dotAll: true).firstMatch(body);
+      final playlistTitle = _decodeXmlEntities(feedTitleMatch?.group(1)?.trim() ?? 'YouTube');
+
+      final entries = <Map<String, String>>[];
+      final entryPattern = RegExp(
+        r'<entry>.*?<yt:videoId>([^<]+)</yt:videoId>.*?<title>([^<]+)</title>.*?<published>([^<]+)</published>.*?<media:thumbnail\s+url="([^"]+)"',
+        dotAll: true,
+      );
+      for (final m in entryPattern.allMatches(body)) {
+        entries.add({
+          'videoId': m.group(1)!,
+          'title': _decodeXmlEntities(m.group(2)!),
+          'published': m.group(3)!,
+          'thumbnail': m.group(4)!,
+        });
+      }
+
+      String sortDate = '';
+      if (entries.isNotEmpty) {
+        final pub = entries.first['published'] ?? '';
+        sortDate = pub.length >= 10 ? pub.substring(0, 10) : '';
+      }
+
+      return {
+        'playlistId': playlistId,
+        'title': playlistTitle,
+        'sortDate': sortDate,
+        'entries': entries,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
 
   static const List<Map<String, Object>> _virtualTournamentData = [
     {
@@ -813,6 +893,42 @@ class _HomeScreenState extends State<HomeScreen> {
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
     if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
+      // YouTube-Playlist
+      if (pid.startsWith('__yt_')) {
+        final ytPid = pid.substring('__yt_'.length);
+        Map<String, dynamic>? data = _youtubeCache[ytPid];
+        data ??= await _fetchYoutubePlaylist(ytPid);
+        if (data != null) {
+          _youtubeCache[ytPid] = data;
+          final entries = (data['entries'] as List).cast<Map<String, String>>();
+          final videos = entries.map((e) {
+            final title = e['title'] ?? '';
+            final publishedStr = e['published'] ?? '';
+            return VideoItem(
+              id: e['videoId']!,
+              title: title,
+              teams: _parseTeams(title),
+              gender: _parseGender(title),
+              round: _parseRound(title),
+              tournament: _parseTournament(title),
+              thumbnailUrl: e['thumbnail'] ?? '',
+              duration: 0,
+              matchDate: DateTime.tryParse(publishedStr),
+              eventState: 'VOD_PUBLIC',
+              scheduledEnd: null,
+              linkUrl: 'https://www.youtube.com/watch?v=${e['videoId']}&list=$ytPid',
+            );
+          }).toList()
+            ..sort((a, b) {
+              if (a.matchDate == null) return 1;
+              if (b.matchDate == null) return -1;
+              return b.matchDate!.compareTo(a.matchDate!);
+            });
+          if (_videosLoadEpoch == epoch && mounted) setState(() => _videos = videos);
+        }
+        return;
+      }
+
       // Virtuelles Turnier (einzelne Media-IDs)
       if (pid.startsWith('__') && pid != _allId) {
         final vtData = _virtualTournamentData.cast<Map<String, Object>>()
