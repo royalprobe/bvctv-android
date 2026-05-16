@@ -2367,6 +2367,17 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             try { var v = $_jsGetVideo; if (v) _flutterSetupVideo(v); } catch(e) {}
             p.on('ready', function() {
               FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+              try {
+                var audios = [];
+                try { audios = p.getAudioTracks() || []; } catch(e) {}
+                FlutterChannel.postMessage(JSON.stringify({
+                  type: 'audioTracks',
+                  count: audios.length,
+                  tracks: audios.map(function(a) {
+                    return { name: a.name, language: a.language, autoselect: a.autoselect, groupid: a.groupid };
+                  })
+                }));
+              } catch(e) {}
               setTimeout(function() {
                 _forceMaxQuality(p);
                 if(window.flShowControls) window.flShowControls();
@@ -2499,6 +2510,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     try {
       final data = jsonDecode(msg.message);
       final type = data['type'];
+      if (type == 'audioTracks') {
+        debugPrint('[bvctv-audio] count=${data['count']} tracks=${data['tracks']}');
+        return;
+      }
       if (type == 'ready') {
         final dur = (data['dur'] ?? 0).toDouble();
         _startPositionPolling();
