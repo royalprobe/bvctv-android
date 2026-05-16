@@ -2207,6 +2207,51 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   void _onPageFinished() {
     _runJs('''
       try { FlutterChannel.postMessage(JSON.stringify({type:'pageFinished', href: location.href})); } catch(e) {}
+      // Diagnose: wo ist jwplayer? Top-Window oder iframe?
+      (function() {
+        function findJw() {
+          try { if (typeof jwplayer === 'function') return { where: 'top', jw: jwplayer() }; } catch(e) {}
+          var frames = document.querySelectorAll('iframe');
+          for (var i = 0; i < frames.length; i++) {
+            try {
+              var w = frames[i].contentWindow;
+              if (w && typeof w.jwplayer === 'function') {
+                return { where: 'iframe-' + i, jw: w.jwplayer() };
+              }
+            } catch(e) {}
+          }
+          return null;
+        }
+        var attempts = 0;
+        var iv = setInterval(function() {
+          attempts++;
+          var found = findJw();
+          if (found && found.jw) {
+            try {
+              var tracks = [];
+              try { tracks = found.jw.getAudioTracks() || []; } catch(e) {}
+              var state = '';
+              try { state = found.jw.getState ? found.jw.getState() : ''; } catch(e) {}
+              FlutterChannel.postMessage(JSON.stringify({
+                type: 'audioProbe',
+                where: found.where,
+                state: state,
+                attempt: attempts,
+                count: tracks.length,
+                tracks: tracks.map(function(a) {
+                  return { name: a.name, language: a.language, autoselect: a.autoselect, groupid: a.groupid };
+                })
+              }));
+              if (tracks.length > 0 || attempts > 30) clearInterval(iv);
+            } catch(e) {
+              FlutterChannel.postMessage(JSON.stringify({type:'audioProbe', error: String(e), attempt: attempts}));
+            }
+          } else if (attempts > 30) {
+            FlutterChannel.postMessage(JSON.stringify({type:'audioProbe', error: 'no-jwplayer-found', attempt: attempts}));
+            clearInterval(iv);
+          }
+        }, 500);
+      })();
       window._flutterPaused = false;
 
       // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
@@ -2538,6 +2583,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       final type = data['type'];
       if (type == 'audioTracks') {
         debugPrint('[bvctv-audio] count=${data['count']} tracks=${data['tracks']}');
+        return;
+      }
+      if (type == 'audioProbe') {
+        debugPrint('[bvctv-audio-probe] $data');
         return;
       }
       if (type == 'ready') {
