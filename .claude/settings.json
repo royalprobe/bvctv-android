@@ -204,7 +204,10 @@
       "PowerShell(python deploy_update.py -m \"Diagnostic: log JW Player getAudioTracks\\(\\) to see if multiple audio tracks \\(dolby/stereo/languages\\) are offered\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.67.apk\" -Force; Write-Host \"Cleared + backed up\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick12.log\")",
-      "PowerShell(python deploy_update.py -m \"Audio diagnostic: report getAudioTracks via race-fallback + JW audioTracks event so we capture all paths\")"
+      "PowerShell(python deploy_update.py -m \"Audio diagnostic: report getAudioTracks via race-fallback + JW audioTracks event so we capture all paths\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.68.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick13.log\")",
+      "PowerShell(python deploy_update.py -m \"Audio diagnostic: log all JS messages + pageFinished marker to verify the FlutterChannel pipe works at all\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

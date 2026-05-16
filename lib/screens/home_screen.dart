@@ -2206,6 +2206,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   void _onPageFinished() {
     _runJs('''
+      try { FlutterChannel.postMessage(JSON.stringify({type:'pageFinished', href: location.href})); } catch(e) {}
       window._flutterPaused = false;
 
       // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
@@ -2513,6 +2514,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   }
 
   void _onJsMessage(JavaScriptMessage msg) {
+    debugPrint('[bvctv-js] ${msg.message.length > 200 ? msg.message.substring(0, 200) : msg.message}');
     try {
       final data = jsonDecode(msg.message);
       final type = data['type'];
