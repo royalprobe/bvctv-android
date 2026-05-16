@@ -190,7 +190,9 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.58.apk\" -Force; Write-Host \"Cleared + backed up\")",
       "PowerShell(python deploy_update.py -m \"Player: revert prompt=none rewrite \\(caused loop\\) + add cookie diagnostics for signin/tv domains\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.59.apk\" -Force; Write-Host \"Cleared + backed up\")",
-      "PowerShell(python deploy_update.py -m \"Login: allow OAuth callback to complete so tv.volleyballworld.com session cookies get set + tolerant token exchange\")"
+      "PowerShell(python deploy_update.py -m \"Login: allow OAuth callback to complete so tv.volleyballworld.com session cookies get set + tolerant token exchange\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.60.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell(python deploy_update.py -m \"Login: pop after OAuth callback redirects to tv.volleyballworld.com homepage \\(not /api/oauth\\) so user reaches HomeScreen\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

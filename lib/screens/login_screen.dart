@@ -467,11 +467,16 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           debugPrint('[bvctv-login] onLoadStop: $url');
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
-                          // OAuth-Callback hat geladen, Server hat Session-Cookies auf tv.volleyballworld.com gesetzt.
-                          // Jetzt poppen wir mit dem zwischengespeicherten Code.
+                          // OAuth-Callback erfolgreich = Server redirected nach Cookie-Setzung
+                          // auf tv.volleyballworld.com/ (oder andere nicht-Auth-Seite).
+                          // Auf /login oder /oauth bleiben heißt Auth ist fehlgeschlagen — WebView offen lassen.
                           final urlStr = url?.toString() ?? '';
-                          if (_pendingCode != null && urlStr.startsWith(widget.redirectUri)) {
-                            debugPrint('[bvctv-login] pop after redirect settled (codeLen=${_pendingCode!.length})');
+                          final isTvDomain = urlStr.startsWith('https://tv.volleyballworld.com');
+                          final isAuthPath = urlStr.contains('/api/oauth') ||
+                              urlStr.contains('/login') ||
+                              urlStr.contains('/oauth?');
+                          if (_pendingCode != null && isTvDomain && !isAuthPath) {
+                            debugPrint('[bvctv-login] auth landed on tv homepage, popping (codeLen=${_pendingCode!.length})');
                             final code = _pendingCode!;
                             _pendingCode = null;
                             if (mounted) Navigator.of(context).pop(code);
