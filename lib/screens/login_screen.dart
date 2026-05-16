@@ -85,6 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    String? token;
     try {
       final tokenResponse = await http.post(
         Uri.parse(_tokenEndpoint),
@@ -97,27 +98,26 @@ class _LoginScreenState extends State<LoginScreen> {
           'code_verifier': codeVerifier,
         },
       );
-
+      debugPrint('[bvctv-login] token exchange status=${tokenResponse.statusCode}');
       if (tokenResponse.statusCode == 200) {
         final data = jsonDecode(tokenResponse.body);
-        final token = data['access_token'];
-        if (token != null && mounted) {
-          await const FlutterSecureStorage()
-              .write(key: 'access_token', value: token);
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => HomeScreen(accessToken: token)),
-          );
-        }
-      } else {
-        setState(() =>
-            _errorMessage = S.tokenError(tokenResponse.statusCode));
+        token = data['access_token'] as String?;
       }
     } catch (e) {
-      setState(() => _errorMessage = S.errorMsg(e.toString()));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      debugPrint('[bvctv-login] token exchange error: $e');
     }
+
+    if (!mounted) return;
+    // Auch ohne Token weitermachen: Cookies auf tv.volleyballworld.com sind gesetzt,
+    // Player funktioniert via Session. Home-API nutzt ctx mit Token (kann fehlschlagen).
+    await const FlutterSecureStorage().write(key: 'access_token', value: token ?? '');
+    if (mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => HomeScreen(accessToken: token ?? '')),
+      );
+    }
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
@@ -166,6 +166,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   bool _loading = true;
   InAppWebViewController? _webController;
   final GlobalKey _stackKey = GlobalKey();
+  String? _pendingCode;
 
   double _cursorX = 300;
   double _cursorY = 200;
@@ -466,6 +467,15 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           debugPrint('[bvctv-login] onLoadStop: $url');
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
+                          // OAuth-Callback hat geladen, Server hat Session-Cookies auf tv.volleyballworld.com gesetzt.
+                          // Jetzt poppen wir mit dem zwischengespeicherten Code.
+                          final urlStr = url?.toString() ?? '';
+                          if (_pendingCode != null && urlStr.startsWith(widget.redirectUri)) {
+                            debugPrint('[bvctv-login] pop after redirect settled (codeLen=${_pendingCode!.length})');
+                            final code = _pendingCode!;
+                            _pendingCode = null;
+                            if (mounted) Navigator.of(context).pop(code);
+                          }
                         },
                         // Fire Stick / Amazon WebView crasht den Renderer beim
                         // OIDC-Submit. Statt Route fallen zu lassen (→ "Login
@@ -483,13 +493,14 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           debugPrint('[bvctv-login] shouldOverrideUrlLoading: $url');
                           if (url.startsWith(widget.redirectUri)) {
                             final code = Uri.parse(url).queryParameters['code'];
-                            // Nur poppen wenn ein code vorhanden ist — Zwischenschritte ignorieren
                             if (code != null && code.isNotEmpty) {
-                              debugPrint('[bvctv-login] pop with code (len=${code.length})');
-                              if (mounted) Navigator.of(context).pop(code);
-                              return NavigationActionPolicy.CANCEL;
+                              // ALLOW statt CANCEL: Server-Callback muss laufen damit
+                              // Session-Cookies auf tv.volleyballworld.com gesetzt werden
+                              // (sonst zeigt der Player später seinen eigenen Login).
+                              // Pop passiert in onLoadStop nachdem die Seite geladen hat.
+                              _pendingCode = code;
+                              debugPrint('[bvctv-login] code received, letting redirect complete (len=${code.length})');
                             }
-                            return NavigationActionPolicy.ALLOW;
                           }
                           return NavigationActionPolicy.ALLOW;
                         },
