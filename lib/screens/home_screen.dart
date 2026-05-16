@@ -2461,6 +2461,24 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             } catch(e) {}
             p.on('levels', function() { _forceMaxQuality(p); });
             p.on('audioTracks', function() { _reportAudios(p, 'audioTracks-event'); });
+            // Audio-Track-Poll: 'audioTracks'-Event könnte schon gefeuert haben bevor wir registrieren
+            var _audioPolled = false;
+            var _audioPollAttempts = 0;
+            var _audioPoll = setInterval(function() {
+              _audioPollAttempts++;
+              try {
+                var tracks = p.getAudioTracks() || [];
+                if (tracks.length > 0 && !_audioPolled) {
+                  _audioPolled = true;
+                  _reportAudios(p, 'poll');
+                  clearInterval(_audioPoll);
+                }
+              } catch(e) {}
+              if (_audioPollAttempts > 30) {
+                if (!_audioPolled) _reportAudios(p, 'poll-timeout');
+                clearInterval(_audioPoll);
+              }
+            }, 500);
             p.on('play',  function() {
               if (!window._flutterPaused) FlutterChannel.postMessage(JSON.stringify({type:'play'}));
             });
