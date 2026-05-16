@@ -1003,7 +1003,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openVideo(VideoItem video) {
     if (video.isYouTube) {
-      launchUrl(Uri.parse(video.linkUrl!), mode: LaunchMode.externalApplication);
+      // YT-Playlists öffnen in eingebettetem WebView statt externer App,
+      // damit Back-Taste zurück zur BVCTV-Video-Liste führt.
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => YoutubeWebViewScreen(videoId: video.id, title: video.title),
+      ));
       return;
     }
     if (video.isLive) {
@@ -3013,5 +3017,48 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         ),
       ),
     ]);
+  }
+}
+
+class YoutubeWebViewScreen extends StatefulWidget {
+  final String videoId;
+  final String title;
+  const YoutubeWebViewScreen({super.key, required this.videoId, required this.title});
+
+  @override
+  State<YoutubeWebViewScreen> createState() => _YoutubeWebViewScreenState();
+}
+
+class _YoutubeWebViewScreenState extends State<YoutubeWebViewScreen> {
+  bool _loading = true;
+
+  @override
+  Widget build(BuildContext context) {
+    // YouTube embed mit Autoplay + Vollbild. mute=1 erlaubt Autoplay ohne Geste.
+    final embedUrl =
+        'https://www.youtube.com/embed/${widget.videoId}?autoplay=1&playsinline=1&fs=1&modestbranding=1';
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            InAppWebView(
+              initialUrlRequest: URLRequest(url: WebUri(embedUrl)),
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                mediaPlaybackRequiresUserGesture: false,
+                allowsInlineMediaPlayback: true,
+                userAgent:
+                    'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+              ),
+              onLoadStart: (_, __) => setState(() => _loading = true),
+              onLoadStop: (_, __) => setState(() => _loading = false),
+            ),
+            if (_loading)
+              const Center(child: CircularProgressIndicator(color: Colors.orange)),
+          ],
+        ),
+      ),
+    );
   }
 }
