@@ -2365,19 +2365,23 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           var p = jwplayer();
           if (p && p.getState) {
             try { var v = $_jsGetVideo; if (v) _flutterSetupVideo(v); } catch(e) {}
-            p.on('ready', function() {
-              FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+            function _reportAudios(p, source) {
               try {
                 var audios = [];
                 try { audios = p.getAudioTracks() || []; } catch(e) {}
                 FlutterChannel.postMessage(JSON.stringify({
                   type: 'audioTracks',
+                  source: source,
                   count: audios.length,
                   tracks: audios.map(function(a) {
                     return { name: a.name, language: a.language, autoselect: a.autoselect, groupid: a.groupid };
                   })
                 }));
               } catch(e) {}
+            }
+            p.on('ready', function() {
+              FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+              _reportAudios(p, 'ready');
               setTimeout(function() {
                 _forceMaxQuality(p);
                 if(window.flShowControls) window.flShowControls();
@@ -2451,9 +2455,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               var st = p.getState();
               if (st && st !== 'idle' && st !== 'error') {
                 FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+                _reportAudios(p, 'race-fallback');
               }
             } catch(e) {}
             p.on('levels', function() { _forceMaxQuality(p); });
+            p.on('audioTracks', function() { _reportAudios(p, 'audioTracks-event'); });
             p.on('play',  function() {
               if (!window._flutterPaused) FlutterChannel.postMessage(JSON.stringify({type:'play'}));
             });

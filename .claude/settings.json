@@ -201,7 +201,10 @@
       "PowerShell(python deploy_update.py -m \"YouTube videos: open in in-app WebView \\(autoplay embed\\) instead of external YouTube app so Back returns to BVCTV\")",
       "PowerShell(python deploy_update.py -m \"YouTube WebView: use m.youtube.com/watch instead of /embed/ to bypass Error 153 \\(embedding-disabled videos\\)\")",
       "PowerShell(python deploy_update.py -m \"YouTube: revert to external launchUrl \\(simpler\\) and remove unused in-app YoutubeWebViewScreen\")",
-      "PowerShell(python deploy_update.py -m \"Diagnostic: log JW Player getAudioTracks\\(\\) to see if multiple audio tracks \\(dolby/stereo/languages\\) are offered\")"
+      "PowerShell(python deploy_update.py -m \"Diagnostic: log JW Player getAudioTracks\\(\\) to see if multiple audio tracks \\(dolby/stereo/languages\\) are offered\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.67.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick12.log\")",
+      "PowerShell(python deploy_update.py -m \"Audio diagnostic: report getAudioTracks via race-fallback + JW audioTracks event so we capture all paths\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
