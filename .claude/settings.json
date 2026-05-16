@@ -184,7 +184,9 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick4.log\")",
       "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick4.log\"; Get-Content $logFile | Select-String -Pattern \"bvctv|tv\\\\.volleyballworld|signin\\\\.volleyballworld|zapp-5434|self-link|player|access_token|localStorage|quick-bricky|oauth|Renderer process|RenderProcessGone|aw_browser_terminator\" -CaseSensitive:$false | Where-Object { $_ -notmatch \"AwContents|NavigationHandle|FileArg|J\\\\.N\\\\.OII|FlutterWebViewFactory|inappwebview_android\\\\.webview\\\\.in_app_w|InAppWebView\\\\.loadUrl|FlutterWebView\\\\.makeInitialLoad|chromium-Amazon|content\\\\.app\\\\.Sandboxed|WebViewExt|VkPipeline|JwPlayer|webview_chromium\" } | Select-Object -First 100)",
       "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick4.log\"; \\(Get-Content $logFile | Measure-Object -Line\\).Lines; Get-Content $logFile | Select-String -Pattern \"chromium\\\\\\(|vbtv|xample|flutter|Renderer process|aw_browser\" | Select-Object -First 50)",
-      "PowerShell(python deploy_update.py -m \"Player: add diagnostic logging \\(URL nav, console, localStorage keys, token len\\) to find why player still shows login\")"
+      "PowerShell(python deploy_update.py -m \"Player: add diagnostic logging \\(URL nav, console, localStorage keys, token len\\) to find why player still shows login\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.57.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell(python deploy_update.py -m \"Player: rewrite OIDC prompt=login to prompt=none for silent reauth using existing signin session\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

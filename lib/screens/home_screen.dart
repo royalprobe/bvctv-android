@@ -2748,8 +2748,18 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         onConsoleMessage: (_, msg) {
           debugPrint('[bvctv-player] console.${msg.messageLevel}: ${msg.message}');
         },
-        shouldOverrideUrlLoading: (_, action) async {
-          debugPrint('[bvctv-player] nav: ${action.request.url}');
+        shouldOverrideUrlLoading: (controller, action) async {
+          final url = action.request.url?.toString() ?? '';
+          debugPrint('[bvctv-player] nav: $url');
+          // OIDC zwingt mit prompt=login zur Neueingabe. Wir haben aber bereits
+          // eine Session auf signin.volleyballworld.com — schreibe auf prompt=none
+          // damit der Server stille Reauth macht und Cookies auf tv.volleyballworld.com setzt.
+          if (url.contains('signin.volleyballworld.com') && url.contains('prompt=login')) {
+            final newUrl = url.replaceAll('prompt=login', 'prompt=none');
+            debugPrint('[bvctv-player] rewrite prompt=login -> prompt=none: $newUrl');
+            controller.loadUrl(urlRequest: URLRequest(url: WebUri(newUrl)));
+            return NavigationActionPolicy.CANCEL;
+          }
           return NavigationActionPolicy.ALLOW;
         },
         onLoadStop: (controller, url) async {
