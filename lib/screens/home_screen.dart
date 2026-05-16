@@ -3034,16 +3034,17 @@ class _YoutubeWebViewScreenState extends State<YoutubeWebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // YouTube embed mit Autoplay + Vollbild. mute=1 erlaubt Autoplay ohne Geste.
-    final embedUrl =
-        'https://www.youtube.com/embed/${widget.videoId}?autoplay=1&playsinline=1&fs=1&modestbranding=1';
+    // /embed/ ist für viele BVB-Streams gesperrt (Error 153). Daher direkt
+    // die mobile YouTube-Seite — funktioniert für alle Videos und ist
+    // weiterhin im WebView, Back-Taste bringt zurück zur Video-Liste.
+    final watchUrl = 'https://m.youtube.com/watch?v=${widget.videoId}';
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Stack(
           children: [
             InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri(embedUrl)),
+              initialUrlRequest: URLRequest(url: WebUri(watchUrl)),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 mediaPlaybackRequiresUserGesture: false,

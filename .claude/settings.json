@@ -198,7 +198,8 @@
       "Bash(git log *)",
       "PowerShell(python deploy_update.py -m \"Player: revert InAppWebView on Android \\(cookies are shared via system WebView anyway\\); restore webview_flutter path for highest resolution\")",
       "PowerShell(python deploy_update.py -m \"Add 4 YouTube playlists as tournaments \\(RSS-based, click opens YouTube app\\), sorted chronologically\")",
-      "PowerShell(python deploy_update.py -m \"YouTube videos: open in in-app WebView \\(autoplay embed\\) instead of external YouTube app so Back returns to BVCTV\")"
+      "PowerShell(python deploy_update.py -m \"YouTube videos: open in in-app WebView \\(autoplay embed\\) instead of external YouTube app so Back returns to BVCTV\")",
+      "PowerShell(python deploy_update.py -m \"YouTube WebView: use m.youtube.com/watch instead of /embed/ to bypass Error 153 \\(embedding-disabled videos\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
