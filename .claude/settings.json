@@ -192,7 +192,11 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.59.apk\" -Force; Write-Host \"Cleared + backed up\")",
       "PowerShell(python deploy_update.py -m \"Login: allow OAuth callback to complete so tv.volleyballworld.com session cookies get set + tolerant token exchange\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.60.apk\" -Force; Write-Host \"Cleared + backed up\")",
-      "PowerShell(python deploy_update.py -m \"Login: pop after OAuth callback redirects to tv.volleyballworld.com homepage \\(not /api/oauth\\) so user reaches HomeScreen\")"
+      "PowerShell(python deploy_update.py -m \"Login: pop after OAuth callback redirects to tv.volleyballworld.com homepage \\(not /api/oauth\\) so user reaches HomeScreen\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.61.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "Bash(xargs -I{} echo \"{}\")",
+      "Bash(git log *)",
+      "PowerShell(python deploy_update.py -m \"Player: revert InAppWebView on Android \\(cookies are shared via system WebView anyway\\); restore webview_flutter path for highest resolution\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

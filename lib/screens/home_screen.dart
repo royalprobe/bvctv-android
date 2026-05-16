@@ -1838,7 +1838,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   WebViewController? _controller;
   InAppWebViewController? _inAppController;
 
-  bool get _useInAppWebView => !kIsWeb && (Platform.isAndroid || Platform.isWindows);
+  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
 
   void _runJs(String js) {
     if (_useInAppWebView) {
