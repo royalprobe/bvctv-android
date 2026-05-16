@@ -171,7 +171,13 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell pm list packages | Select-String -Pattern \"vbtv|bvctv\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Write-Host \"Logs cleared. Ready for reproduction.\")",
       "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick.log\"; if \\(Test-Path $logFile\\) { $size = \\(Get-Item $logFile\\).Length; Write-Host \"Log size: $size bytes\"; Get-Content $logFile | Select-String -Pattern \"oauth|redirect|code=|signin|tv\\\\.volleyball|fulljit|navigation|loginCancel|Cancelled|error\" -CaseSensitive:$false | Select-Object -Last 80 } else { Write-Host \"Log not found\" })",
-      "PowerShell(python deploy_update.py -m \"Fire Stick: onRenderProcessGone handler + remove clearCache to fix Login Cancelled on submit\")"
+      "PowerShell(python deploy_update.py -m \"Fire Stick: onRenderProcessGone handler + remove clearCache to fix Login Cancelled on submit\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb devices)",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Write-Host \"Cleared\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick2.log\")",
+      "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick2.log\"; $size = \\(Get-Item $logFile\\).Length; Write-Host \"Log size: $size bytes\"; Get-Content $logFile | Select-String -Pattern \"chromium|Renderer|RenderProcess|aw_browser|vbtv_ap|flutter|webview|navigat|oauth|signin|TombstoneSurface|fatal|SIGSEGV\" -CaseSensitive:$false | Select-Object -First 80)",
+      "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick2.log\"; Get-Content $logFile | Select-String -Pattern \"Renderer process|aw_browser_terminator|RenderProcessGone|shouldOverrideUrlLoading|onLoadStart|onLoadStop|DPAD_CENTER|libprocessgroup|signin\\\\.volleyballworld|tv\\\\.volleyballworld|api/oauth|chromium\\\\\\(13\" -CaseSensitive:$false | Where-Object { $_ -notmatch \"AwContents|NavigationHandle|WebViewChromium\\\\.loadUrl|chromium-Amazon|InAppWebView\\\\.loadUrl|FlutterWebView\\\\.makeInitialLoad|FlutterWebViewFactory|java\\\\.lang\\\\.Object J\\\\.N\" } | Select-Object -First 80)",
+      "PowerShell(python deploy_update.py -m \"Login WebView: PopScope + remove back-button + debug logging to trace null-pop\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",

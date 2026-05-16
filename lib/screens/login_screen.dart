@@ -419,7 +419,9 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
@@ -429,10 +431,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white70),
-                    onPressed: () => Navigator.of(context).pop(null),
-                  ),
+                  const SizedBox(width: 12),
                   Text(
                     S.loginTitle,
                     style: const TextStyle(color: Colors.white70, fontSize: 16),
@@ -459,15 +458,20 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                               'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                         ),
                         onWebViewCreated: (c) => _webController = c,
-                        onLoadStart: (_, __) => setState(() => _loading = true),
-                        onLoadStop: (_, __) async {
+                        onLoadStart: (_, url) {
+                          debugPrint('[bvctv-login] onLoadStart: $url');
+                          setState(() => _loading = true);
+                        },
+                        onLoadStop: (_, url) async {
+                          debugPrint('[bvctv-login] onLoadStop: $url');
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
                         },
                         // Fire Stick / Amazon WebView crasht den Renderer beim
                         // OIDC-Submit. Statt Route fallen zu lassen (→ "Login
                         // Cancelled"), URL neu laden — Session-Cookies bleiben.
-                        onRenderProcessGone: (controller, _) async {
+                        onRenderProcessGone: (controller, detail) async {
+                          debugPrint('[bvctv-login] onRenderProcessGone didCrash=${detail.didCrash} priority=${detail.rendererPriorityAtExit}');
                           if (!mounted) return;
                           setState(() => _loading = true);
                           await controller.loadUrl(
@@ -476,10 +480,12 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         },
                         shouldOverrideUrlLoading: (controller, action) async {
                           final url = action.request.url?.toString() ?? '';
+                          debugPrint('[bvctv-login] shouldOverrideUrlLoading: $url');
                           if (url.startsWith(widget.redirectUri)) {
                             final code = Uri.parse(url).queryParameters['code'];
                             // Nur poppen wenn ein code vorhanden ist — Zwischenschritte ignorieren
                             if (code != null && code.isNotEmpty) {
+                              debugPrint('[bvctv-login] pop with code (len=${code.length})');
                               if (mounted) Navigator.of(context).pop(code);
                               return NavigationActionPolicy.CANCEL;
                             }
@@ -505,6 +511,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 }
