@@ -254,8 +254,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _preloadFocusTimer?.cancel();
     _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
       if (!mounted) return;
+      final ctx = _buildCtx();
       final selfLink = Uri.encodeComponent(
-        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+        'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
       );
       final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
       final ctrl = WebViewController()
@@ -897,14 +898,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _launchPlayer(VideoItem video, {required bool seekToLive}) {
+    final ctx = _buildCtx();
     final selfLink = Uri.encodeComponent(
-      'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false',
+      'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
     );
     final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => WebViewPlayerScreen(
         title: video.teams,
         playerUrl: playerUrl,
+        accessToken: widget.accessToken,
         useRealDuration: !_twoHourMode,
         seekToLive: seekToLive,
         isLive: video.isLive,
@@ -1821,10 +1824,11 @@ class _CountrySearchSheet extends StatelessWidget {
 class WebViewPlayerScreen extends StatefulWidget {
   final String title;
   final String playerUrl;
+  final String accessToken;
   final bool useRealDuration;
   final bool seekToLive;
   final bool isLive;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
+  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, required this.accessToken, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
 
   @override
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
@@ -1834,7 +1838,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   WebViewController? _controller;
   InAppWebViewController? _inAppController;
 
-  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
+  bool get _useInAppWebView => !kIsWeb && (Platform.isAndroid || Platform.isWindows);
 
   void _runJs(String js) {
     if (_useInAppWebView) {
@@ -2700,16 +2704,24 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   Widget _buildWebViewWidget() {
     if (_useInAppWebView) {
+      final tokenEscaped = widget.accessToken.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
       return InAppWebView(
         initialUrlRequest: URLRequest(url: WebUri(widget.playerUrl)),
         initialUserScripts: UnmodifiableListView([
           UserScript(
             source: '''
-              window.FlutterChannel = {
-                postMessage: function(msg) {
-                  try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
-                }
-              };
+              (function() {
+                // Token vor jeder Seiten-JS in localStorage setzen — verhindert,
+                // dass tv.volleyballworld.com/player seinen eigenen Login zeigt.
+                try {
+                  localStorage.setItem("quick-bricky-login-flow.access_token", "$tokenEscaped");
+                } catch(e) {}
+                window.FlutterChannel = {
+                  postMessage: function(msg) {
+                    try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
+                  }
+                };
+              })();
             ''',
             injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
           ),
