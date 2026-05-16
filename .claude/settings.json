@@ -211,7 +211,10 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.69.apk\" -Force; Write-Host \"Cleared + backed up\")",
       "PowerShell(python deploy_update.py -m \"Audio diagnostic: poll getAudioTracks every 500ms since the audioTracks event may already have fired before we attach the listener\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.70.apk\" -Force; Write-Host \"Cleared + backed up\")",
-      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick15.log\")"
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick15.log\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.71.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -v time 2>&1 | Out-File -Encoding utf8 -FilePath \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick16.log\")",
+      "PowerShell(python deploy_update.py -m \"Remove audio diagnostic logging \\(jwplayer is in cross-origin iframe, no API access; single track is what we see\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
