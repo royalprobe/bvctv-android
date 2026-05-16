@@ -2732,9 +2732,14 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           javaScriptEnabled: true,
           userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         ),
-        onWebViewCreated: (controller) {
+        onWebViewCreated: (controller) async {
           _inAppController = controller;
           debugPrint('[bvctv-player] created. tokenLen=${widget.accessToken.length} url=${widget.playerUrl}');
+          final cm = CookieManager.instance();
+          final signinCookies = await cm.getCookies(url: WebUri('https://signin.volleyballworld.com'));
+          final tvCookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
+          debugPrint('[bvctv-player] cookies signin: ${signinCookies.map((c) => c.name).toList()}');
+          debugPrint('[bvctv-player] cookies tv: ${tvCookies.map((c) => c.name).toList()}');
           controller.addJavaScriptHandler(
             handlerName: 'FlutterChannel',
             callback: (args) {
@@ -2751,15 +2756,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         shouldOverrideUrlLoading: (controller, action) async {
           final url = action.request.url?.toString() ?? '';
           debugPrint('[bvctv-player] nav: $url');
-          // OIDC zwingt mit prompt=login zur Neueingabe. Wir haben aber bereits
-          // eine Session auf signin.volleyballworld.com — schreibe auf prompt=none
-          // damit der Server stille Reauth macht und Cookies auf tv.volleyballworld.com setzt.
-          if (url.contains('signin.volleyballworld.com') && url.contains('prompt=login')) {
-            final newUrl = url.replaceAll('prompt=login', 'prompt=none');
-            debugPrint('[bvctv-player] rewrite prompt=login -> prompt=none: $newUrl');
-            controller.loadUrl(urlRequest: URLRequest(url: WebUri(newUrl)));
-            return NavigationActionPolicy.CANCEL;
-          }
           return NavigationActionPolicy.ALLOW;
         },
         onLoadStop: (controller, url) async {

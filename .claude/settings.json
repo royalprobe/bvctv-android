@@ -186,7 +186,9 @@
       "PowerShell($logFile = \"C:\\\\Users\\\\Simon\\\\BVCTV\\\\firestick4.log\"; \\(Get-Content $logFile | Measure-Object -Line\\).Lines; Get-Content $logFile | Select-String -Pattern \"chromium\\\\\\(|vbtv|xample|flutter|Renderer process|aw_browser\" | Select-Object -First 50)",
       "PowerShell(python deploy_update.py -m \"Player: add diagnostic logging \\(URL nav, console, localStorage keys, token len\\) to find why player still shows login\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.57.apk\" -Force; Write-Host \"Cleared + backed up\")",
-      "PowerShell(python deploy_update.py -m \"Player: rewrite OIDC prompt=login to prompt=none for silent reauth using existing signin session\")"
+      "PowerShell(python deploy_update.py -m \"Player: rewrite OIDC prompt=login to prompt=none for silent reauth using existing signin session\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; Copy-Item \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.58.apk\" -Force; Write-Host \"Cleared + backed up\")",
+      "PowerShell(python deploy_update.py -m \"Player: revert prompt=none rewrite \\(caused loop\\) + add cookie diagnostics for signin/tv domains\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon",
