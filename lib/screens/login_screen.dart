@@ -58,7 +58,9 @@ class _LoginScreenState extends State<LoginScreen> {
       'response_type': 'code',
       'client_id': _clientId,
       'redirect_uri': _redirectUri,
-      'scope': 'openid email profile',
+      // offline_access fordert vom OIDC-Server einen refresh_token an
+      // (siehe AuthService.refresh), damit der Login nicht nach ~24h vergessen wird.
+      'scope': 'openid email profile offline_access',
       'code_challenge': _generateCodeChallenge(codeVerifier),
       'code_challenge_method': 'S256',
       'prompt': 'login',
@@ -86,6 +88,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     String? token;
+    String? refreshToken;
     try {
       final tokenResponse = await http.post(
         Uri.parse(_tokenEndpoint),
@@ -102,6 +105,8 @@ class _LoginScreenState extends State<LoginScreen> {
       if (tokenResponse.statusCode == 200) {
         final data = jsonDecode(tokenResponse.body);
         token = data['access_token'] as String?;
+        refreshToken = data['refresh_token'] as String?;
+        debugPrint('[bvctv-login] tokens: access=${token != null} refresh=${refreshToken != null}');
       }
     } catch (e) {
       debugPrint('[bvctv-login] token exchange error: $e');
@@ -110,7 +115,15 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     // Auch ohne Token weitermachen: Cookies auf tv.volleyballworld.com sind gesetzt,
     // Player funktioniert via Session. Home-API nutzt ctx mit Token (kann fehlschlagen).
-    await const FlutterSecureStorage().write(key: 'access_token', value: token ?? '');
+    const storage = FlutterSecureStorage();
+    await storage.write(key: 'access_token', value: token ?? '');
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await storage.write(key: 'refresh_token', value: refreshToken);
+    }
+    await storage.write(
+      key: 'token_saved_at',
+      value: DateTime.now().millisecondsSinceEpoch.toString(),
+    );
     if (mounted) {
       Navigator.pushReplacement(
         context,

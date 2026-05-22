@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
+import '../services/auth_service.dart';
 
 class VideoItem {
   final String id;
@@ -460,7 +461,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     );
                     if (confirm == true && mounted) {
-                      await _storage.delete(key: 'access_token');
+                      await AuthService.logout();
                       if (mounted) {
                         Navigator.pushReplacement(context,
                             MaterialPageRoute(builder: (_) => const LoginScreen()));

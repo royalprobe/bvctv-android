@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/auth_service.dart';
 import 'l10n/app_language.dart';
 
 void main() async {
@@ -34,8 +35,75 @@ class BVCTVApp extends StatelessWidget {
           scaffoldBackgroundColor: const Color(0xFF0A0A0A),
         ),
         home: initialToken != null && initialToken!.isNotEmpty
-            ? HomeScreen(accessToken: initialToken!)
+            ? _SessionGate(initialToken: initialToken!)
             : const LoginScreen(),
+      ),
+    );
+  }
+}
+
+/// Beim App-Start mit gespeichertem Token: Token-Alter prüfen.
+/// — Frisch (< 6h): direkt zu HomeScreen, kein Refresh nötig.
+/// — Älter: refresh_token-Grant ausführen, tv-Cookies warmpingen,
+///   dann HomeScreen mit neuem Token. Bei needsLogin: LoginScreen.
+class _SessionGate extends StatefulWidget {
+  final String initialToken;
+  const _SessionGate({required this.initialToken});
+
+  @override
+  State<_SessionGate> createState() => _SessionGateState();
+}
+
+class _SessionGateState extends State<_SessionGate> {
+  Widget? _next;
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    const storage = FlutterSecureStorage();
+    final savedAtStr = await storage.read(key: 'token_saved_at');
+    final savedAt = int.tryParse(savedAtStr ?? '0') ?? 0;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - savedAt;
+    final isFresh = savedAt > 0 && ageMs < const Duration(hours: 6).inMilliseconds;
+
+    if (isFresh) {
+      if (mounted) {
+        setState(() => _next = HomeScreen(accessToken: widget.initialToken));
+      }
+      return;
+    }
+
+    // Token ist älter — refresh versuchen.
+    final result = await AuthService.refresh();
+
+    if (result == AuthRefreshResult.needsLogin) {
+      if (mounted) setState(() => _next = const LoginScreen());
+      return;
+    }
+
+    // Bei success: Cookies auf tv.volleyballworld.com auch erneuern
+    String token = widget.initialToken;
+    if (result == AuthRefreshResult.success) {
+      final newToken = await storage.read(key: 'access_token');
+      if (newToken != null && newToken.isNotEmpty) token = newToken;
+      await AuthService.refreshTvCookies(token);
+    }
+    // Bei error: alter Token bleibt, weiter nutzen — nächste Session probiert nochmal.
+
+    if (mounted) setState(() => _next = HomeScreen(accessToken: token));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_next != null) return _next!;
+    return const Scaffold(
+      backgroundColor: Color(0xFF0A0A0A),
+      body: Center(
+        child: CircularProgressIndicator(color: Colors.orange),
       ),
     );
   }
