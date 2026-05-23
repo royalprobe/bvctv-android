@@ -66,7 +66,8 @@ class _LoginScreenState extends State<LoginScreen> {
       'scope': 'openid email profile',
       'code_challenge': _generateCodeChallenge(codeVerifier),
       'code_challenge_method': 'S256',
-      'prompt': 'login',
+      // prompt=login bewusst weggelassen — siehe SilentLoginFlow für Hintergrund
+      // (zwingt sonst eine neue Session pro Aufruf → 3-Geräte-Limit voll).
       'workflow': 'fulljitflow_v3_fast',
     });
 

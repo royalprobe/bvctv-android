@@ -40,11 +40,12 @@ Future<void> _refreshSessionInBackground(String initialToken) async {
   final savedAtStr = await storage.read(key: 'token_saved_at');
   final savedAt = int.tryParse(savedAtStr ?? '0') ?? 0;
   final ageMs = DateTime.now().millisecondsSinceEpoch - savedAt;
-  // tv.*-Cookies leben empirisch nur wenige Stunden, der API-Token deutlich
-  // länger. Wenn der Token älter als 4h ist, lieber im Hintergrund eine
-  // frische Session ziehen — sonst landet der Player auf der VBW-Login-Seite.
+  // Konservativer Threshold um das VBW-3-Geräte-Limit nicht zuzuspammen: jeder
+  // Silent-Re-Login kann eine neue Session am Server anlegen. 12h ist
+  // pragmatischer Mittelweg (Cookies meist noch warm, max einmal pro App-
+  // Session). Bei stale Cookies springt die Player-Side Recovery sowieso ein.
   final isFresh =
-      savedAt > 0 && ageMs < const Duration(hours: 4).inMilliseconds;
+      savedAt > 0 && ageMs < const Duration(hours: 12).inMilliseconds;
   if (isFresh && initialToken.isNotEmpty) return;
 
   AuthState.isLoggingIn.value = true;

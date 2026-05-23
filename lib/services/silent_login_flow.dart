@@ -43,7 +43,12 @@ class SilentLoginFlow {
       'scope': 'openid email profile',
       'code_challenge': challenge,
       'code_challenge_method': 'S256',
-      'prompt': 'login',
+      // prompt=login bewusst weggelassen: zwingt den Server sonst jedesmal
+      // eine neue Session aufzumachen → zählt aufs 3-Geräte-Limit. Ohne den
+      // Parameter darf der Server vorhandene signin.* Cookies wiederverwenden
+      // (Cookie-Jar wird zwischen WebViews geteilt) und es entsteht kein
+      // neuer Device-Eintrag. Fällt sowieso auf das Login-Formular zurück,
+      // wenn keine gültige Session existiert — Autofill greift dann.
       'workflow': 'fulljitflow_v3_fast',
     }).toString();
 
