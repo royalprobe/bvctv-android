@@ -423,7 +423,10 @@
       "PowerShell(python deploy_update.py -m \"OAuth: prompt=login rausgeworfen \\(verhindert neue Server-Session pro Silent-Login\\) + Threshold 4h->12h - schont das VBW-3-Geraete-Limit\")",
       "WebFetch(domain:volley-ball.at)",
       "Bash(grep -nE \"fetch\\\\\\(|\\\\\\\\.ajax|XMLHttpRequest|\\\\\\\\.php\" /tmp/beachliga.js)",
-      "PowerShell(python deploy_update.py -m \"App-Start-Hinweis wenn keine Credentials gespeichert sind \\(mit 'Nicht mehr zeigen'-Checkbox\\)\")"
+      "PowerShell(python deploy_update.py -m \"App-Start-Hinweis wenn keine Credentials gespeichert sind \\(mit 'Nicht mehr zeigen'-Checkbox\\)\")",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.40:5555; & $adb devices)",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.40:5555 install -r \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; \\(& $adb -s 192.168.0.40:5555 shell dumpsys package com.example.vbtv_app\\) | Select-String -Pattern \"versionName|versionCode\" | Select-Object -First 2)",
+      "PowerShell(python deploy_update.py -m \"Poertschach 2026: 4 weitere Laola-Streams \\(Center Court 2/3, Court 2 zweiter, Medaillen-Entscheidung\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
