@@ -49,7 +49,9 @@ class VideoItem {
     this.linkUrl,
   });
 
-  bool get isYouTube => linkUrl != null;
+  bool get isExternal => linkUrl != null;
+  bool get isYouTube => linkUrl != null && linkUrl!.contains('youtube.com');
+  bool get isLaola => linkUrl != null && linkUrl!.contains('laola1.at');
   bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
   bool get isInstantVod {
     if (eventState != 'INSTANT_VOD') return false;
@@ -882,19 +884,23 @@ class _HomeScreenState extends State<HomeScreen> {
         } catch (_) {}
       }));
 
-      // Virtuelle Turniere immer anhängen
+      // Virtuelle + Laola1-Turniere immer anhängen
       final virtualEntries = _virtualTournamentData
           .map((vt) => {'id': vt['id'] as String, 'title': vt['title'] as String})
           .toList();
+      final laolaFallbackEntries = _laolaTournamentData
+          .map((lt) => {'id': lt['id'] as String, 'title': lt['title'] as String})
+          .toList();
 
       if (cgPlaylistIds.isEmpty) {
-        // Kein API-Ergebnis → sofort virtuelle Turniere zeigen
+        // Kein API-Ergebnis → sofort Laola1 + virtuelle Turniere zeigen
+        final fallback = [...laolaFallbackEntries, ...virtualEntries];
         if (mounted) {
           setState(() {
-            _availableTournaments = virtualEntries;
-            _currentPlaylistId = virtualEntries.first['id']!;
+            _availableTournaments = fallback;
+            _currentPlaylistId = fallback.first['id']!;
           });
-          _loadVideos(virtualEntries.first['id']!);
+          _loadVideos(fallback.first['id']!);
         }
         return;
       }
@@ -952,9 +958,16 @@ class _HomeScreenState extends State<HomeScreen> {
         };
       })).then((r) => r.whereType<Map<String, String>>().toList());
 
+      // Laola1-Turniere: kein API-Call, nur statisches Datum + Titel
+      final laolaTournaments = _laolaTournamentData.map((lt) => {
+            'id': lt['id'] as String,
+            'title': lt['title'] as String,
+            'matchDate': lt['matchDate'] as String,
+          }).toList();
+
       final realTournaments = await realTournamentsF;
       final youtubeTournaments = await youtubeTournamentsF;
-      final results = [...realTournaments, ...youtubeTournaments];
+      final results = [...realTournaments, ...youtubeTournaments, ...laolaTournaments];
 
       // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
       int titleYear(String t) {
@@ -1057,6 +1070,40 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Laola1.at-Turniere: externer Stream, klick öffnet Browser/App.
+  // Jeder Court ist ein eigenes "Video" innerhalb des Turniers.
+  static const List<Map<String, Object>> _laolaTournamentData = [
+    {
+      'id': '__laola_poertschach_2026__',
+      'title': 'Pro Masters Pörtschach 2026',
+      'matchDate': '2026-05-24',
+      'tournament': 'win2day PRO MASTERS Pörtschach',
+      'videos': [
+        {
+          'id': '2166461',
+          'title': 'Center Court',
+          'url': 'https://www.laola1.at/de/video/player/2166461',
+          'thumbnail':
+              'https://video.laola1.at/image/800x450/58de884f-bf67-4455-b058-454828f01e36.jpg',
+        },
+        {
+          'id': '2166462',
+          'title': 'Court 2',
+          'url': 'https://www.laola1.at/de/video/player/2166462',
+          'thumbnail':
+              'https://video.laola1.at/image/800x450/e9350bae-d5bc-4a9e-8158-55d1ab4bdd38.jpg',
+        },
+        {
+          'id': '2166463',
+          'title': 'Court 3',
+          'url': 'https://www.laola1.at/de/video/player/2166463',
+          'thumbnail':
+              'https://video.laola1.at/image/800x450/a1b52362-0704-4c5e-b16f-1656499500c0.jpg',
+        },
+      ],
+    },
+  ];
+
   static const List<Map<String, Object>> _virtualTournamentData = [
     {
       'id': '__vienna_2024__',
@@ -1129,6 +1176,36 @@ class _HomeScreenState extends State<HomeScreen> {
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
     if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
+      // Laola1-Turnier: Liste mit hardcoded URLs/Thumbnails, kein API-Call.
+      if (pid.startsWith('__laola_')) {
+        final ltData = _laolaTournamentData
+            .firstWhere((t) => t['id'] == pid, orElse: () => const {});
+        if (ltData.isNotEmpty) {
+          final tournamentName = ltData['tournament'] as String? ?? '';
+          final dateStr = ltData['matchDate'] as String?;
+          final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
+          final entries = (ltData['videos'] as List).cast<Map<String, String>>();
+          final videos = entries.map((e) {
+            return VideoItem(
+              id: e['id']!,
+              title: e['title']!,
+              teams: e['title']!,
+              gender: '',
+              round: '',
+              tournament: tournamentName,
+              thumbnailUrl: e['thumbnail'] ?? '',
+              duration: 0,
+              matchDate: date,
+              eventState: 'VOD_PUBLIC',
+              scheduledEnd: null,
+              linkUrl: e['url'],
+            );
+          }).toList();
+          if (mounted) setState(() => _videos = videos);
+        }
+        return;
+      }
+
       // YouTube-Playlist
       if (pid.startsWith('__yt_')) {
         final ytPid = pid.substring('__yt_'.length);
@@ -1238,7 +1315,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openVideo(VideoItem video) {
-    if (video.isYouTube) {
+    if (video.isExternal) {
       launchUrl(Uri.parse(video.linkUrl!), mode: LaunchMode.externalApplication);
       return;
     }
@@ -1324,6 +1401,13 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
         decoration: BoxDecoration(color: const Color(0xFFCC0000), borderRadius: BorderRadius.circular(3)),
         child: const Text('YT', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
+      );
+    }
+    if (video.isLaola) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(color: const Color(0xFF0066B2), borderRadius: BorderRadius.circular(3)),
+        child: const Text('LAOLA', style: TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold, letterSpacing: 1)),
       );
     }
     if (video.isLive) {
@@ -1512,7 +1596,7 @@ class _HomeScreenState extends State<HomeScreen> {
       video: video,
       spoiler: _isSpoiler(video.round),
       onPressed: () => _openVideo(video),
-      onPreload: (video.isYouTube || video.isLive || video.isUpcoming || !Platform.isAndroid)
+      onPreload: (video.isExternal || video.isLive || video.isUpcoming || !Platform.isAndroid)
           ? null
           : () => _startPreload(video),
       genderBadge: _genderBadge(video.gender),
