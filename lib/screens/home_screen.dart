@@ -19,6 +19,7 @@ import 'dart:io' show Platform;
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 import '../services/auth_service.dart';
+import '../services/auth_state.dart';
 import '../services/laola_stream_extractor.dart';
 
 class VideoItem {
@@ -67,8 +68,7 @@ class VideoItem {
 }
 
 class HomeScreen extends StatefulWidget {
-  final String accessToken;
-  const HomeScreen({super.key, required this.accessToken});
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -708,6 +708,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                     if (confirm == true && mounted) {
                       await AuthService.logout();
+                      AuthState.token.value = '';
                       if (mounted) {
                         Navigator.pushReplacement(context,
                             MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -774,7 +775,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _buildCtx() {
     final payload = jsonEncode({
-      'quick-bricky-login-flow.access_token': widget.accessToken,
+      'quick-bricky-login-flow.access_token': AuthState.token.value,
       'platform': 'web',
     });
     return base64Url.encode(utf8.encode(payload));
@@ -1529,7 +1530,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _launchPlayer(video, seekToLive: false);
   }
 
-  void _launchPlayer(VideoItem video, {required bool seekToLive}) {
+  Future<void> _launchPlayer(VideoItem video, {required bool seekToLive}) async {
+    if (!await _ensureLoggedIn()) return;
+    if (!mounted) return;
     final ctx = _buildCtx();
     final selfLink = Uri.encodeComponent(
       'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
@@ -1539,12 +1542,75 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (_) => WebViewPlayerScreen(
         title: video.teams,
         playerUrl: playerUrl,
-        accessToken: widget.accessToken,
+        accessToken: AuthState.token.value,
         useRealDuration: !_twoHourMode,
         seekToLive: seekToLive,
         isLive: video.isLive,
       ),
     ));
+  }
+
+  /// Stellt sicher dass ein Token verfügbar ist, bevor der VBW-Player geöffnet
+  /// wird. Reihenfolge:
+  ///   1. Token bereits da → sofort weiter.
+  ///   2. Silent-Login läuft → Spinner-Dialog (max 8s, cancel-bar).
+  ///   3. Sonst → interaktiver LoginScreen wird gepushed.
+  Future<bool> _ensureLoggedIn() async {
+    if (AuthState.token.value.isNotEmpty) return true;
+
+    if (AuthState.isLoggingIn.value) {
+      final tokenFuture =
+          AuthState.waitForToken(timeout: const Duration(seconds: 8));
+      bool cancelled = false;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) {
+          tokenFuture.whenComplete(() {
+            try {
+              if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
+            } catch (_) {}
+          });
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            content: Row(children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.orange),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  S.isEn ? 'Signing in...' : 'Anmeldung läuft...',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
+            ]),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  cancelled = true;
+                  Navigator.pop(ctx);
+                },
+                child: Text(S.cancel,
+                    style: const TextStyle(color: Colors.white54)),
+              ),
+            ],
+          );
+        },
+      );
+      if (cancelled) return false;
+      if (AuthState.token.value.isNotEmpty) return true;
+    }
+
+    if (!mounted) return false;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    return AuthState.token.value.isNotEmpty;
   }
 
   void _showLiveDialog(VideoItem video) {

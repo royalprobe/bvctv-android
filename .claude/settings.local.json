@@ -415,7 +415,8 @@
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell \"pm list packages | grep -i bvc\")",
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell \"pm list packages\" | Select-String -Pattern \"bvc|volley\")",
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; \\(& $adb -s 192.168.0.54:5555 shell dumpsys package com.example.vbtv_app\\) | Select-String -Pattern \"versionName|versionCode\" | Select-Object -First 4)",
-      "PowerShell(python deploy_update.py -m \"VBW-Player: SWR-Cache fuer Turniere, 90s Live-Refresh, Player-Auto-Retry nach 15s, JW-UI-Suppress via MutationObserver statt 150ms-Polling\")"
+      "PowerShell(python deploy_update.py -m \"VBW-Player: SWR-Cache fuer Turniere, 90s Live-Refresh, Player-Auto-Retry nach 15s, JW-UI-Suppress via MutationObserver statt 150ms-Polling\")",
+      "PowerShell(python deploy_update.py -m \"Lazy-Login: HomeScreen direkt sichtbar, Silent-Login parallel im Hintergrund. VBW-Player-Klick wartet auf laufenden Login oder oeffnet LoginScreen on-demand\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",

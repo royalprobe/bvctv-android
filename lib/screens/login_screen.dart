@@ -10,6 +10,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../services/auth_state.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -124,7 +125,8 @@ class _LoginScreenState extends State<LoginScreen> {
     // Auch ohne Token weitermachen: Cookies auf tv.volleyballworld.com sind gesetzt,
     // Player funktioniert via Session. Home-API nutzt ctx mit Token (kann fehlschlagen).
     const storage = FlutterSecureStorage();
-    await storage.write(key: 'access_token', value: token ?? '');
+    final finalToken = token ?? '';
+    await storage.write(key: 'access_token', value: finalToken);
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await storage.write(key: 'refresh_token', value: refreshToken);
     }
@@ -132,11 +134,18 @@ class _LoginScreenState extends State<LoginScreen> {
       key: 'token_saved_at',
       value: DateTime.now().millisecondsSinceEpoch.toString(),
     );
+    AuthState.token.value = finalToken;
     if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => HomeScreen(accessToken: token ?? '')),
-      );
+      // Mid-App-Login (z.B. nach Logout oder Video-Klick ohne Token): nur poppen.
+      // Erster App-Start (LoginScreen ist Stack-Wurzel): zur HomeScreen wechseln.
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context, true);
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+      }
     }
     if (mounted) setState(() => _isLoading = false);
   }
