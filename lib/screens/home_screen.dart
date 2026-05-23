@@ -339,115 +339,203 @@ class _HomeScreenState extends State<HomeScreen> {
     // If network failed (successCount == 0), keep existing _liveVideos intact
   }
 
+  Future<String?> _promptSingleValue({
+    required BuildContext outerCtx,
+    required String label,
+    required String initialValue,
+    bool obscure = false,
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    final ctrl = TextEditingController(text: initialValue);
+    return showDialog<String>(
+      context: outerCtx,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(label, style: const TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          obscureText: obscure,
+          keyboardType: keyboardType,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: const Color(0xFF2A2A2A),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Colors.orange, width: 2),
+            ),
+          ),
+          onSubmitted: (_) => Navigator.pop(ctx, ctrl.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(S.cancel,
+                style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('OK',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showSavedCredentialsDialog(BuildContext outerCtx) async {
-    final emailCtrl = TextEditingController(
-      text: await _storage.read(key: 'saved_email') ?? '',
-    );
-    final pwCtrl = TextEditingController(
-      text: await _storage.read(key: 'saved_password') ?? '',
-    );
-    bool obscure = true;
+    String email = await _storage.read(key: 'saved_email') ?? '';
+    String pw = await _storage.read(key: 'saved_password') ?? '';
     if (!mounted) return;
     await showDialog<void>(
       context: outerCtx,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialog) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          title: Text(S.savedCredentials,
-              style: const TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(S.savedCredentialsHint,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
-              const SizedBox(height: 16),
-              TextField(
-                controller: emailCtrl,
-                autofocus: true,
-                keyboardType: TextInputType.emailAddress,
-                autofillHints: const [AutofillHints.email],
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: S.emailAddress,
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF2A2A2A),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Colors.orange, width: 2),
-                  ),
+        builder: (ctx, setDialog) {
+          Widget fieldRow({
+            required String label,
+            required String value,
+            required String placeholder,
+            required bool obscure,
+            required VoidCallback onEdit,
+            bool autofocus = false,
+          }) {
+            final display = value.isEmpty
+                ? placeholder
+                : (obscure ? '•' * value.length.clamp(0, 12) : value);
+            return _TvFocusButton(
+              autofocus: autofocus,
+              borderRadius: 8,
+              onPressed: onEdit,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: pwCtrl,
-                obscureText: obscure,
-                autofillHints: const [AutofillHints.password],
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: S.password,
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF2A2A2A),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Colors.orange, width: 2),
+                child: Row(children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(label,
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11)),
+                        const SizedBox(height: 2),
+                        Text(
+                          display,
+                          style: TextStyle(
+                            color: value.isEmpty ? Colors.white38 : Colors.white,
+                            fontSize: 15,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
-                  suffixIcon: IconButton(
-                    icon: Icon(obscure ? Icons.visibility : Icons.visibility_off,
-                        color: Colors.white54),
-                    onPressed: () => setDialog(() => obscure = !obscure),
+                  const Icon(Icons.edit, color: Colors.white38, size: 18),
+                ]),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            title: Text(S.savedCredentials,
+                style: const TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(S.savedCredentialsHint,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  const SizedBox(height: 16),
+                  fieldRow(
+                    label: S.emailAddress,
+                    value: email,
+                    placeholder: S.credentialsNotSet,
+                    obscure: false,
+                    autofocus: true,
+                    onEdit: () async {
+                      final result = await _promptSingleValue(
+                        outerCtx: ctx,
+                        label: S.emailAddress,
+                        initialValue: email,
+                        keyboardType: TextInputType.emailAddress,
+                      );
+                      if (result != null) setDialog(() => email = result.trim());
+                    },
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  fieldRow(
+                    label: S.password,
+                    value: pw,
+                    placeholder: S.credentialsNotSet,
+                    obscure: true,
+                    onEdit: () async {
+                      final result = await _promptSingleValue(
+                        outerCtx: ctx,
+                        label: S.password,
+                        initialValue: pw,
+                        obscure: true,
+                      );
+                      if (result != null) setDialog(() => pw = result);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Text(S.autoFillNotice,
+                      style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                ],
               ),
-              const SizedBox(height: 12),
-              Text(S.autoFillNotice,
-                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                await _storage.delete(key: 'saved_email');
-                await _storage.delete(key: 'saved_password');
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: Text(S.clear,
-                  style: const TextStyle(color: Colors.redAccent)),
             ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(S.cancel,
-                  style: const TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.black,
-              ),
-              onPressed: () async {
-                final email = emailCtrl.text.trim();
-                final pw = pwCtrl.text;
-                if (email.isNotEmpty) {
-                  await _storage.write(key: 'saved_email', value: email);
-                } else {
+            actions: [
+              TextButton(
+                onPressed: () async {
                   await _storage.delete(key: 'saved_email');
-                }
-                if (pw.isNotEmpty) {
-                  await _storage.write(key: 'saved_password', value: pw);
-                } else {
                   await _storage.delete(key: 'saved_password');
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: Text(S.save,
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: Text(S.clear,
+                    style: const TextStyle(color: Colors.redAccent)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(S.cancel,
+                    style: const TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () async {
+                  if (email.isNotEmpty) {
+                    await _storage.write(key: 'saved_email', value: email);
+                  } else {
+                    await _storage.delete(key: 'saved_email');
+                  }
+                  if (pw.isNotEmpty) {
+                    await _storage.write(key: 'saved_password', value: pw);
+                  } else {
+                    await _storage.delete(key: 'saved_password');
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: Text(S.save,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
