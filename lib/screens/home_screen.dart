@@ -177,8 +177,16 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
     });
     _liveRefreshTimer = Timer.periodic(const Duration(seconds: 60), (_) => _loadLiveAndUpcoming());
-    _videoRefreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
-      if (!_isLoading) _loadVideos(null, true);
+    _videoRefreshTimer = Timer.periodic(const Duration(seconds: 90), (_) {
+      if (_isLoading) return;
+      final pid = _currentPlaylistId;
+      if (pid.isEmpty) return;
+      // Externe Quellen (YouTube/Laola) ändern sich kaum und haben keinen
+      // Live-State – nicht im Hintergrund refreshen.
+      if (pid.startsWith('__yt_') || pid.startsWith('__laola_')) return;
+      // Virtuelle Turniere sind abgeschlossene Events, kein Refresh.
+      if (pid.startsWith('__') && pid != _allId) return;
+      _loadVideos(null, true, true);
     });
     if (Platform.isAndroid) {
       PackageInfo.fromPlatform().then((i) { if (mounted) setState(() => _appVersion = i.version); });
@@ -1036,6 +1044,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // Befüllt in _loadTournamentList, gelesen in _loadVideos.
   final Map<String, Map<String, dynamic>> _youtubeCache = {};
 
+  // SWR-Cache für reguläre VBW-Playlists, virtuelle Turniere und __all__:
+  // Cache-Hit zeigt die Liste sofort, dann läuft ein silent re-fetch im
+  // Hintergrund. Externe Quellen (YouTube/Laola) haben ihren eigenen Cache.
+  final Map<String, List<VideoItem>> _videosCache = {};
+
   // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
   // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
   // gelesen. So bleiben die Listen auch nach Neustart aktuell.
@@ -1287,10 +1300,32 @@ class _HomeScreenState extends State<HomeScreen> {
     return (await Future.wait(futures)).whereType<VideoItem>().toList();
   }
 
-  Future<void> _loadVideos([String? playlistId, bool silent = false]) async {
+  Future<void> _loadVideos([
+    String? playlistId,
+    bool silent = false,
+    bool forceRefresh = false,
+  ]) async {
     final pid = playlistId ?? _currentPlaylistId;
     final epoch = _videosLoadEpoch;
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
+
+    // Stale-while-revalidate: bei Cache-Hit sofort zeigen + im Hintergrund
+    // refreshen. Externe Quellen (YouTube/Laola) bringen eigenen Cache mit
+    // und sind hier ausgeschlossen.
+    final isExternalSource =
+        pid.startsWith('__yt_') || pid.startsWith('__laola_');
+    final cached = _videosCache[pid];
+    if (!forceRefresh && !isExternalSource && cached != null) {
+      if (mounted) {
+        setState(() {
+          _videos = cached;
+          _isLoading = false;
+          _errorMessage = null;
+        });
+      }
+      silent = true;
+    }
+
     if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
       // Laola1-Turnier: Liste mit hardcoded URLs/Thumbnails, kein API-Call.
@@ -1405,7 +1440,10 @@ class _HomeScreenState extends State<HomeScreen> {
               if (b.matchDate == null) return -1;
               return b.matchDate!.compareTo(a.matchDate!);
             });
-          if (mounted) setState(() => _videos = videos);
+          _videosCache[pid] = videos;
+          if (_videosLoadEpoch == epoch && mounted) {
+            setState(() => _videos = videos);
+          }
         }
         return;
       }
@@ -1437,7 +1475,10 @@ class _HomeScreenState extends State<HomeScreen> {
             if (b.matchDate == null) return -1;
             return b.matchDate!.compareTo(a.matchDate!);
           });
-        setState(() => _videos = unique);
+        _videosCache[pid] = unique;
+        if (_videosLoadEpoch == epoch && mounted) {
+          setState(() => _videos = unique);
+        }
         return;
       }
 
@@ -1454,6 +1495,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (b.matchDate == null) return -1;
             return b.matchDate!.compareTo(a.matchDate!);
           });
+        _videosCache[pid] = videos;
         if (_videosLoadEpoch != epoch) return;
         setState(() => _videos = videos);
       } else {
@@ -2494,6 +2536,25 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   // 1x=10s 2x=30s 3x=1min 4x=3min 5x=5min 6x=10min 7x=20min 8x=30min, danach +30min
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
 
+  // Auto-Retry wenn JW Player nach 15s nicht "ready" gemeldet hat (Netz-Blip etc.)
+  Timer? _initRetryTimer;
+  bool _initRetryDone = false;
+
+  void _markPlayerReady() {
+    _initRetryTimer?.cancel();
+    _initRetryTimer = null;
+  }
+
+  void _scheduleInitRetry() {
+    _initRetryTimer?.cancel();
+    _initRetryTimer = Timer(const Duration(seconds: 15), () {
+      if (!mounted || _playerReady || _initRetryDone) return;
+      _initRetryDone = true;
+      debugPrint('[player] initial load timeout — retrying playerUrl');
+      _loadUrl(widget.playerUrl);
+    });
+  }
+
   bool _handleRemoteKey(KeyEvent event) {
     if (!mounted || !_playerReady) return false;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
@@ -2633,6 +2694,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           Future.delayed(const Duration(seconds: 2), () {
             if (mounted && !_playerReady) {
               setState(() { _playerReady = true; _isPlaying = true; });
+              _markPlayerReady();
               _startHideControlsTimer();
               _startPositionPolling();
             }
@@ -2648,6 +2710,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
     _loadUrl(widget.playerUrl);
     } // end if (!_useInAppWebView)
+    _scheduleInitRetry();
   }
 
   // Findet das <video>-Element im Hauptframe oder in iframes
@@ -2812,17 +2875,45 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         } catch(e) {}
       }
 
-      _suppressDoc(document);
-      setInterval(function() {
+      // Statt 150ms-Polling: MutationObserver feuert nur bei DOM-Änderungen,
+      // requestAnimationFrame batched mehrere Mutations zu einem Suppress-Run.
+      var _suppressPending = false;
+      function _runSuppress() {
+        _suppressPending = false;
         _suppressDoc(document);
         _suppressBodyLevel();
         document.querySelectorAll('iframe').forEach(function(iframe) {
           try {
             var doc = iframe.contentDocument || iframe.contentWindow.document;
-            if (doc && doc.readyState !== 'uninitialized') _suppressDoc(doc);
+            if (doc && doc.readyState !== 'uninitialized') {
+              _suppressDoc(doc);
+              _attachObserverTo(doc);
+            }
           } catch(e) {}
         });
-      }, 150);
+      }
+      function _scheduleSuppress() {
+        if (_suppressPending) return;
+        _suppressPending = true;
+        (window.requestAnimationFrame || function(cb){setTimeout(cb,16);})(_runSuppress);
+      }
+      function _attachObserverTo(doc) {
+        if (!doc || doc._flObsAttached) return;
+        try {
+          doc._flObsAttached = true;
+          var o = new MutationObserver(_scheduleSuppress);
+          o.observe(doc.documentElement || doc, {
+            childList: true, subtree: true,
+            attributes: true, attributeFilter: ['style','class']
+          });
+        } catch(e) {}
+      }
+      _runSuppress();
+      _attachObserverTo(document);
+      // Iframes können verzögert reinkommen (Cookie-Banner-iframe, Player-iframe etc.)
+      setTimeout(_scheduleSuppress, 500);
+      setTimeout(_scheduleSuppress, 2000);
+      setTimeout(_scheduleSuppress, 5000);
 
       var _qualityForced = false;
       function _forceMaxQuality(p) {
@@ -2985,6 +3076,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         _startPositionPolling();
         if (mounted) {
           setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
+          _markPlayerReady();
           _startHideControlsTimer();
           final safeTitle = widget.title.replaceAll("'", "\\'");
           _runJs("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
@@ -2994,6 +3086,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           // 'ready' might have been missed — unlock controls on first play
           _startPositionPolling();
           setState(() { _playerReady = true; _isPlaying = true; });
+          _markPlayerReady();
           _startHideControlsTimer();
         } else {
           setState(() => _isPlaying = true);
@@ -3188,6 +3281,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _hideControlsTimer?.cancel();
     _positionTimer?.cancel();
     _blackScreenTimer?.cancel();
+    _initRetryTimer?.cancel();
     try {
       _runJs(
         'try{jwplayer().stop();}catch(e){}'
@@ -3363,6 +3457,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           Future.delayed(const Duration(seconds: 4), () {
             if (mounted && !_playerReady) {
               setState(() { _playerReady = true; _isPlaying = true; });
+              _markPlayerReady();
               _startHideControlsTimer();
               _startPositionPolling();
             }

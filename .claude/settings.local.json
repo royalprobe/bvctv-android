@@ -409,7 +409,13 @@
       "PowerShell(Test-Path deploy_update.py; \\(Get-Command adb -ErrorAction SilentlyContinue\\).Source)",
       "PowerShell(python deploy_update.py -m \"Laola1 Tour Pro als dynamische Liste \\(HTML-Scrape, 4 Seiten\\)\")",
       "PowerShell(python deploy_update.py -m \"Laola-Player: DPad-Seek statt 6-Min-Slider-Sprung \\(10s/30s/1m/3m/5m/10m/20m/30m\\)\")",
-      "PowerShell(python deploy_update.py -m \"Laola-Player: HLS-Master parsen und immer hoechste Bitrate/Aufloesung waehlen statt ABR\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Player: HLS-Master parsen und immer hoechste Bitrate/Aufloesung waehlen statt ABR\")",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; if \\(-not \\(Test-Path $adb\\)\\) { $adb = \\(Get-ChildItem -Path \"$env:LOCALAPPDATA\\\\Android\" -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object -First 1\\).FullName }; if \\(-not $adb\\) { $adb = \\(Get-ChildItem -Path \"C:\\\\Users\\\\Simon\" -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object -First 1\\).FullName }; \"ADB: $adb\"; & $adb connect 192.168.0.54:5555; & $adb devices)",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 install -r \"build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; & $adb -s 192.168.0.54:5555 shell dumpsys package com.example.bvctv 2>$null | Select-String -Pattern \"versionName\" | Select-Object -First 1)",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell \"pm list packages | grep -i bvc\")",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell \"pm list packages\" | Select-String -Pattern \"bvc|volley\")",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; \\(& $adb -s 192.168.0.54:5555 shell dumpsys package com.example.vbtv_app\\) | Select-String -Pattern \"versionName|versionCode\" | Select-Object -First 4)",
+      "PowerShell(python deploy_update.py -m \"VBW-Player: SWR-Cache fuer Turniere, 90s Live-Refresh, Player-Auto-Retry nach 15s, JW-UI-Suppress via MutationObserver statt 150ms-Polling\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
