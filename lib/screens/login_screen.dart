@@ -226,6 +226,71 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 })();
 ''';
 
+  // Captures a newly-set password on the "Set your password" page so the
+  // saved credentials stay in sync after VBW forces a reset (e.g. wegen
+  // 3-Geräte-Limit). Only fires when the page actually looks like a
+  // password-reset prompt, to avoid grabbing the regular login password.
+  static const _passwordCaptureScript = r'''
+(function() {
+  if (window.__bvctv_pw_hook_installed) return;
+  function bodyTextMatches(needles) {
+    var t = (document.body && document.body.textContent || '').toLowerCase();
+    for (var i = 0; i < needles.length; i++) {
+      if (t.indexOf(needles[i]) >= 0) return true;
+    }
+    return false;
+  }
+  function tryInstall() {
+    var pwInputs = document.querySelectorAll('input[type="password"]');
+    if (pwInputs.length === 0) return false;
+    if (!bodyTextMatches([
+      'set your password',
+      'set password',
+      'neues passwort',
+      'passwort festlegen',
+    ])) return false;
+
+    function readAndSend() {
+      try {
+        var pw = pwInputs[0].value || '';
+        if (pw.length > 0) {
+          window.flutter_inappwebview.callHandler('BvctvNewPassword', pw);
+        }
+      } catch (e) {}
+    }
+
+    document.querySelectorAll('button, input[type="submit"]').forEach(function(btn) {
+      if (btn.__bvctvHooked) return;
+      btn.__bvctvHooked = true;
+      btn.addEventListener('click', readAndSend, true);
+    });
+    document.querySelectorAll('form').forEach(function(f) {
+      if (f.__bvctvHooked) return;
+      f.__bvctvHooked = true;
+      f.addEventListener('submit', readAndSend, true);
+    });
+    return true;
+  }
+
+  if (tryInstall()) {
+    window.__bvctv_pw_hook_installed = true;
+    return;
+  }
+  // SPA-Rendering: spät nachfragen, ob die Seite jetzt das Reset-Formular zeigt.
+  var attempts = 0;
+  var iv = setInterval(function() {
+    if (window.__bvctv_pw_hook_installed || attempts++ > 30) {
+      clearInterval(iv);
+      return;
+    }
+    if (tryInstall()) {
+      window.__bvctv_pw_hook_installed = true;
+      clearInterval(iv);
+    }
+  }, 500);
+})();
+''';
+
   static String _clickAtScript(double x, double y) {
     final xs = x.toStringAsFixed(1);
     final ys = y.toStringAsFixed(1);
@@ -602,7 +667,21 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           userAgent:
                               'Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
                         ),
-                        onWebViewCreated: (c) => _webController = c,
+                        onWebViewCreated: (c) {
+                          _webController = c;
+                          c.addJavaScriptHandler(
+                            handlerName: 'BvctvNewPassword',
+                            callback: (args) async {
+                              if (args.isEmpty) return;
+                              final pw = args[0]?.toString() ?? '';
+                              if (pw.isEmpty) return;
+                              debugPrint(
+                                  '[bvctv-login] captured new password (len=${pw.length}) — updating saved_password');
+                              await const FlutterSecureStorage().write(
+                                  key: 'saved_password', value: pw);
+                            },
+                          );
+                        },
                         onLoadStart: (_, url) {
                           debugPrint('[bvctv-login] onLoadStart: $url');
                           setState(() => _loading = true);
@@ -611,6 +690,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           debugPrint('[bvctv-login] onLoadStop: $url');
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
+                          await _webController?.evaluateJavascript(
+                              source: _passwordCaptureScript);
                           // Hinterlegte Anmeldedaten auf signin.* automatisch eintragen.
                           final urlStr = url?.toString() ?? '';
                           if (urlStr.startsWith('https://signin.volleyballworld.com')) {
