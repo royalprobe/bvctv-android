@@ -79,6 +79,20 @@ class S {
   static String get password => isEn ? 'Password' : 'Passwort';
   static String get input => isEn ? 'Input' : 'Eingabe';
 
+  // Saved credentials
+  static String get savedCredentials =>
+      isEn ? 'Saved login' : 'Gespeicherte Anmeldedaten';
+  static String get savedCredentialsHint => isEn
+      ? 'Auto-fill the login form when you need to sign in again'
+      : 'Login-Formular automatisch ausfüllen wenn du dich neu anmelden musst';
+  static String get credentialsNotSet => isEn ? 'Not set' : 'Nicht hinterlegt';
+  static String get credentialsSet => isEn ? 'Stored' : 'Hinterlegt';
+  static String get save => isEn ? 'Save' : 'Speichern';
+  static String get clear => isEn ? 'Clear' : 'Löschen';
+  static String get autoFillNotice => isEn
+      ? 'Stored securely on this device (Keystore). Used to auto-fill the official login page.'
+      : 'Wird verschlüsselt am Gerät gespeichert (Keystore). Wird zum automatischen Ausfüllen der offiziellen Login-Seite verwendet.';
+
   // Player
   static String tapCount(int n) => isEn ? 'Tap $n' : 'Klick $n';
   static String get behindLive => isEn ? 'behind live' : 'hinter Live';

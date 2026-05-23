@@ -339,6 +339,119 @@ class _HomeScreenState extends State<HomeScreen> {
     // If network failed (successCount == 0), keep existing _liveVideos intact
   }
 
+  Future<void> _showSavedCredentialsDialog(BuildContext outerCtx) async {
+    final emailCtrl = TextEditingController(
+      text: await _storage.read(key: 'saved_email') ?? '',
+    );
+    final pwCtrl = TextEditingController(
+      text: await _storage.read(key: 'saved_password') ?? '',
+    );
+    bool obscure = true;
+    if (!mounted) return;
+    await showDialog<void>(
+      context: outerCtx,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          title: Text(S.savedCredentials,
+              style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.savedCredentialsHint,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: emailCtrl,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.emailAddress,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pwCtrl,
+                obscureText: obscure,
+                autofillHints: const [AutofillHints.password],
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.password,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure ? Icons.visibility : Icons.visibility_off,
+                        color: Colors.white54),
+                    onPressed: () => setDialog(() => obscure = !obscure),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(S.autoFillNotice,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await _storage.delete(key: 'saved_email');
+                await _storage.delete(key: 'saved_password');
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: Text(S.clear,
+                  style: const TextStyle(color: Colors.redAccent)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(S.cancel,
+                  style: const TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () async {
+                final email = emailCtrl.text.trim();
+                final pw = pwCtrl.text;
+                if (email.isNotEmpty) {
+                  await _storage.write(key: 'saved_email', value: email);
+                } else {
+                  await _storage.delete(key: 'saved_email');
+                }
+                if (pw.isNotEmpty) {
+                  await _storage.write(key: 'saved_password', value: pw);
+                } else {
+                  await _storage.delete(key: 'saved_password');
+                }
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: Text(S.save,
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showSettings() {
     String? updateMsg;
     showDialog(
@@ -438,6 +551,40 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
                   ]),
                 ),
+              ),
+              const Divider(color: Colors.white12, height: 16),
+              FutureBuilder<bool>(
+                future: _storage.read(key: 'saved_email').then((v) => v != null && v.isNotEmpty),
+                builder: (futureCtx, snapshot) {
+                  final stored = snapshot.data ?? false;
+                  return _TvFocusButton(
+                    borderRadius: 6,
+                    onPressed: () async {
+                      await _showSavedCredentialsDialog(ctx);
+                      setDialog(() {});
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(children: [
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(S.savedCredentials,
+                                style: const TextStyle(color: Colors.white70)),
+                            Text(
+                              stored ? S.credentialsSet : S.credentialsNotSet,
+                              style: TextStyle(
+                                color: stored ? Colors.greenAccent : Colors.white38,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        )),
+                        const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
+                      ]),
+                    ),
+                  );
+                },
               ),
               const Divider(color: Colors.white12, height: 24),
               Row(children: [

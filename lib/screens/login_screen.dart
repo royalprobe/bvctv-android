@@ -107,6 +107,12 @@ class _LoginScreenState extends State<LoginScreen> {
         token = data['access_token'] as String?;
         refreshToken = data['refresh_token'] as String?;
         debugPrint('[bvctv-login] tokens: access=${token != null} refresh=${refreshToken != null}');
+      } else {
+        // Body kürzen damit der Log nicht explodiert
+        final body = tokenResponse.body.length > 400
+            ? '${tokenResponse.body.substring(0, 400)}...'
+            : tokenResponse.body;
+        debugPrint('[bvctv-login] token exchange body: $body');
       }
     } catch (e) {
       debugPrint('[bvctv-login] token exchange error: $e');
@@ -180,6 +186,8 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   InAppWebViewController? _webController;
   final GlobalKey _stackKey = GlobalKey();
   String? _pendingCode;
+  String? _savedEmail;
+  String? _savedPassword;
 
   double _cursorX = 300;
   double _cursorY = 200;
@@ -422,6 +430,118 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    _loadSavedCredentials();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    const storage = FlutterSecureStorage();
+    final email = await storage.read(key: 'saved_email');
+    final pw = await storage.read(key: 'saved_password');
+    if (mounted) {
+      setState(() {
+        _savedEmail = email;
+        _savedPassword = pw;
+      });
+    }
+  }
+
+  /// Escape für Einbettung in einen einfach-quotierten JS-String.
+  static String _jsEscape(String s) => s
+      .replaceAll('\\', '\\\\')
+      .replaceAll("'", "\\'")
+      .replaceAll('\n', '\\n')
+      .replaceAll('\r', '\\r')
+      .replaceAll('<', '\\x3c')
+      .replaceAll('>', '\\x3e');
+
+  /// Findet E-Mail/Password-Inputs auf der signin-Seite, füllt sie mit
+  /// den gespeicherten Daten, und klickt den Weiter-/Anmelden-Button.
+  /// Läuft mehrfach (kleine Polls) weil React-Apps die Inputs verzögert mounten.
+  String _autofillScript() {
+    final email = _savedEmail;
+    final pw = _savedPassword;
+    if ((email == null || email.isEmpty) && (pw == null || pw.isEmpty)) {
+      return '';
+    }
+    final emailJs = email != null && email.isNotEmpty ? "'${_jsEscape(email)}'" : 'null';
+    final pwJs = pw != null && pw.isNotEmpty ? "'${_jsEscape(pw)}'" : 'null';
+
+    // Setter über das Native HTMLInputElement.prototype.value — sonst sieht
+    // React den Wert nicht. dispatchEvent('input') feuert state-update.
+    return '''
+(function(){
+  if (window.__bvctv_autofill_running) return;
+  window.__bvctv_autofill_running = true;
+  var email = $emailJs;
+  var pw = $pwJs;
+  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  function setVal(el, val){
+    setter.call(el, val);
+    el.dispatchEvent(new Event('input', {bubbles:true}));
+    el.dispatchEvent(new Event('change', {bubbles:true}));
+  }
+  function findEmail(){
+    return document.querySelector('input[type="email"]')
+      || document.querySelector('input[name*="email" i]')
+      || document.querySelector('input[autocomplete="username"]')
+      || document.querySelector('input[autocomplete="email"]')
+      || document.querySelector('input[name*="user" i]');
+  }
+  function findPass(){
+    return document.querySelector('input[type="password"]');
+  }
+  function findSubmit(){
+    // 1. Sichtbarer enabled submit-button in der Nähe des fokussierten/gefüllten Inputs
+    var btns = Array.prototype.slice.call(document.querySelectorAll(
+      'button[type="submit"], button:not([type]), input[type="submit"]'
+    ));
+    // Filter: sichtbar + nicht disabled
+    btns = btns.filter(function(b){
+      if (b.disabled) return false;
+      var r = b.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    return btns[0] || null;
+  }
+  var attempts = 0;
+  var lastFilled = '';
+  var timer = setInterval(function(){
+    attempts++;
+    if (attempts > 30) { clearInterval(timer); window.__bvctv_autofill_running = false; return; }
+    var emailInp = findEmail();
+    var passInp = findPass();
+    var key = (emailInp ? 'e' : '') + (passInp ? 'p' : '');
+    // Phase 1: nur E-Mail sichtbar
+    if (passInp && pw) {
+      if (lastFilled !== 'p') {
+        if (!passInp.value) setVal(passInp, pw);
+        lastFilled = 'p';
+        setTimeout(function(){
+          var b = findSubmit();
+          if (b) b.click();
+        }, 200);
+        // Nach Submit Phase warten kurz, dann Polling beenden
+        setTimeout(function(){
+          clearInterval(timer);
+          window.__bvctv_autofill_running = false;
+        }, 800);
+      }
+      return;
+    }
+    if (emailInp && email) {
+      if (lastFilled !== 'e') {
+        if (!emailInp.value) setVal(emailInp, email);
+        lastFilled = 'e';
+        setTimeout(function(){
+          var b = findSubmit();
+          if (b) b.click();
+        }, 200);
+      }
+      return;
+    }
+  }, 250);
+})();
+''';
   }
 
   @override
@@ -480,10 +600,17 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           debugPrint('[bvctv-login] onLoadStop: $url');
                           setState(() => _loading = false);
                           await _webController?.evaluateJavascript(source: _initScript);
+                          // Hinterlegte Anmeldedaten auf signin.* automatisch eintragen.
+                          final urlStr = url?.toString() ?? '';
+                          if (urlStr.startsWith('https://signin.volleyballworld.com')) {
+                            final js = _autofillScript();
+                            if (js.isNotEmpty) {
+                              await _webController?.evaluateJavascript(source: js);
+                            }
+                          }
                           // OAuth-Callback erfolgreich = Server redirected nach Cookie-Setzung
                           // auf tv.volleyballworld.com/ (oder andere nicht-Auth-Seite).
                           // Auf /login oder /oauth bleiben heißt Auth ist fehlgeschlagen — WebView offen lassen.
-                          final urlStr = url?.toString() ?? '';
                           final isTvDomain = urlStr.startsWith('https://tv.volleyballworld.com');
                           final isAuthPath = urlStr.contains('/api/oauth') ||
                               urlStr.contains('/login') ||
