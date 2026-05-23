@@ -407,7 +407,8 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.83.apk\" -Force)",
       "Bash(grep -oE '\\(\\\\d{1,2}\\\\.\\\\d{1,2}\\\\.\\\\d{4}|\\\\d{1,2}\\\\.\\\\d{1,2}\\\\.\\\\d{2}|\\\\d{4}-\\\\d{2}-\\\\d{2}\\)' /tmp/laola_list.html)",
       "PowerShell(Test-Path deploy_update.py; \\(Get-Command adb -ErrorAction SilentlyContinue\\).Source)",
-      "PowerShell(python deploy_update.py -m \"Laola1 Tour Pro als dynamische Liste \\(HTML-Scrape, 4 Seiten\\)\")"
+      "PowerShell(python deploy_update.py -m \"Laola1 Tour Pro als dynamische Liste \\(HTML-Scrape, 4 Seiten\\)\")",
+      "PowerShell(python deploy_update.py -m \"Laola-Player: DPad-Seek statt 6-Min-Slider-Sprung \\(10s/30s/1m/3m/5m/10m/20m/30m\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",

@@ -37,6 +37,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _showSeekOverlay = false;
 
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
+  final FocusNode _rootFocusNode = FocusNode(debugLabel: 'LaolaPlayerRoot');
 
   @override
   void initState() {
@@ -47,6 +48,38 @@ class _PlayerScreenState extends State<PlayerScreen> {
       DeviceOrientation.landscapeRight,
     ]);
     _initPlayer();
+  }
+
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    // Sonst landet DPad-Left/Right auf dem Slider (5 % = 6 min Sprung) statt
+    // bei _seek mit unseren 10s/30s/1m/3m/5m/10m/20m/30m-Stufen.
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowLeft) {
+      _seek(false);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _seek(true);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.select ||
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.mediaPlayPause ||
+        key == LogicalKeyboardKey.space) {
+      _togglePlayPause();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown) {
+      setState(() => _showControls = true);
+      _startHideControlsTimer();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   Future<void> _initPlayer() async {
@@ -212,6 +245,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _seekTimer?.cancel();
     _uiTimer?.cancel();
     _blackScreenTimer?.cancel();
+    _rootFocusNode.dispose();
     _controller.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     // Auf Fire Stick (landscape-only) zerlegt setPreferredOrientations
@@ -225,7 +259,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: !_isInitialized
+      body: Focus(
+        focusNode: _rootFocusNode,
+        autofocus: true,
+        onKeyEvent: _onKeyEvent,
+        child: !_isInitialized
           ? const Center(child: CircularProgressIndicator(color: Colors.orange))
           : GestureDetector(
               onTap: _onTap,
@@ -298,13 +336,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 
   Widget _buildControls() {
     final progress = (_fakePosition.inMilliseconds / _fakeDuration.inMilliseconds).clamp(0.0, 1.0);
 
-    return Container(
+    // Slider + IconButtons sind sonst fokussierbar und fangen DPad-Tasten ab.
+    return ExcludeFocus(child: Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -394,6 +434,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 }
