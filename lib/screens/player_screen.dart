@@ -214,7 +214,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _blackScreenTimer?.cancel();
     _controller.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    // Auf Fire Stick (landscape-only) zerlegt setPreferredOrientations
+    // ([portraitUp]) das Layout der Übersicht — leere Liste lässt die
+    // System-Default wirken, gleich wie in WebViewPlayerScreen.
+    SystemChrome.setPreferredOrientations([]);
     super.dispose();
   }
 
