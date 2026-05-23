@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
+import 'services/silent_login_flow.dart';
 import 'l10n/app_language.dart';
 
 void main() async {
@@ -66,22 +67,11 @@ class _SessionGateState extends State<_SessionGate> {
   Future<void> _run() async {
     const storage = FlutterSecureStorage();
 
-    // Hinweis: signin.volleyballworld.com unterstützt offline_access nicht
-    // (siehe Kommentar in login_screen.dart), also haben wir nie einen
-    // refresh_token. Falls doch einer gespeichert ist (z.B. Server-Update
-    // in der Zukunft), versuchen wir den Refresh-Flow.
-    final refreshToken = await storage.read(key: 'refresh_token');
-    if (refreshToken == null || refreshToken.isEmpty) {
-      if (mounted) {
-        setState(() => _next = HomeScreen(accessToken: widget.initialToken));
-      }
-      return;
-    }
-
     final savedAtStr = await storage.read(key: 'token_saved_at');
     final savedAt = int.tryParse(savedAtStr ?? '0') ?? 0;
     final ageMs = DateTime.now().millisecondsSinceEpoch - savedAt;
-    final isFresh = savedAt > 0 && ageMs < const Duration(hours: 6).inMilliseconds;
+    final isFresh =
+        savedAt > 0 && ageMs < const Duration(hours: 18).inMilliseconds;
 
     if (isFresh) {
       if (mounted) {
@@ -90,21 +80,39 @@ class _SessionGateState extends State<_SessionGate> {
       return;
     }
 
-    // Token ist älter — refresh versuchen.
-    final result = await AuthService.refresh();
-
-    if (result == AuthRefreshResult.needsLogin) {
-      if (mounted) setState(() => _next = const LoginScreen());
-      return;
+    // Falls (in Zukunft) refresh_token vorhanden — eigentlicher OIDC-Refresh.
+    // Aktuell liefert signin.* keinen refresh_token, daher fast immer no-op.
+    final refreshToken = await storage.read(key: 'refresh_token');
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      final result = await AuthService.refresh();
+      if (result == AuthRefreshResult.success) {
+        final newToken = await storage.read(key: 'access_token');
+        final token = (newToken != null && newToken.isNotEmpty)
+            ? newToken
+            : widget.initialToken;
+        await AuthService.refreshTvCookies(token);
+        if (mounted) setState(() => _next = HomeScreen(accessToken: token));
+        return;
+      }
     }
 
-    String token = widget.initialToken;
-    if (result == AuthRefreshResult.success) {
-      final newToken = await storage.read(key: 'access_token');
-      if (newToken != null && newToken.isNotEmpty) token = newToken;
-      await AuthService.refreshTvCookies(token);
+    // Silent Re-Login mit gespeicherten Credentials: läuft im
+    // HeadlessInAppWebView, dauert ~3-15s. Bei Erfolg neue Cookies + Token.
+    final savedEmail = await storage.read(key: 'saved_email');
+    if (savedEmail != null && savedEmail.isNotEmpty) {
+      final newToken = await SilentLoginFlow.tryRelogin();
+      if (newToken != null && newToken.isNotEmpty) {
+        if (mounted) setState(() => _next = HomeScreen(accessToken: newToken));
+        return;
+      }
     }
-    if (mounted) setState(() => _next = HomeScreen(accessToken: token));
+
+    // Fallback: kein silent möglich oder fehlgeschlagen — mit altem Token weiter.
+    // Falls die Session auf tv.* schon abgelaufen ist, wird der Player den
+    // Login-Screen anzeigen — dann hilft logout + neu einloggen (Auto-Fill).
+    if (mounted) {
+      setState(() => _next = HomeScreen(accessToken: widget.initialToken));
+    }
   }
 
   @override
