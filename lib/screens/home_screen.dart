@@ -20,6 +20,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 import '../services/auth_service.dart';
 import '../services/auth_state.dart';
+import '../services/silent_login_flow.dart';
 import '../services/laola_stream_extractor.dart';
 
 class VideoItem {
@@ -1538,7 +1539,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
     );
     final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
-    Navigator.push(context, MaterialPageRoute(
+    final result = await Navigator.push<dynamic>(context, MaterialPageRoute(
       builder: (_) => WebViewPlayerScreen(
         title: video.teams,
         playerUrl: playerUrl,
@@ -1548,6 +1549,76 @@ class _HomeScreenState extends State<HomeScreen> {
         isLive: video.isLive,
       ),
     ));
+
+    // Player hat erkannt dass die tv.* Session abgelaufen ist und nach
+    // signin.* umgeleitet wurde → frisch silent re-loggen und das gleiche
+    // Video nochmal versuchen. Wenn silent fehlschlägt: interaktiv.
+    if (result == 'needs_login' && mounted) {
+      final ok = await _refreshSessionForced();
+      if (ok && mounted) {
+        _launchPlayer(video, seekToLive: seekToLive);
+      }
+    }
+  }
+
+  /// Erzwingt eine frische Session: stales Token verwerfen, Silent-Re-Login
+  /// laufen lassen (mit Spinner), bei Misserfolg auf interaktiven LoginScreen
+  /// zurückfallen.
+  Future<bool> _refreshSessionForced() async {
+    if (!mounted) return false;
+    AuthState.token.value = '';
+
+    // Nicht-await'ed: das Spinner-Dialog wird unten manuell wieder gepoppt.
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        content: Row(children: [
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.orange),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              S.isEn ? 'Refreshing session...' : 'Aktualisiere Anmeldung...',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ]),
+      ),
+    );
+
+    bool ok = false;
+    AuthState.isLoggingIn.value = true;
+    try {
+      final email = await _storage.read(key: 'saved_email');
+      if (email != null && email.isNotEmpty) {
+        final newToken = await SilentLoginFlow.tryRelogin();
+        if (newToken != null && newToken.isNotEmpty) {
+          await AuthService.refreshTvCookies(newToken);
+          AuthState.token.value = newToken;
+          ok = true;
+        }
+      }
+    } finally {
+      AuthState.isLoggingIn.value = false;
+    }
+
+    if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+
+    if (!ok) {
+      if (!mounted) return false;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      );
+      return AuthState.token.value.isNotEmpty;
+    }
+    return true;
   }
 
   /// Stellt sicher dass eine frische Session verfügbar ist, bevor der VBW-Player
@@ -2617,6 +2688,27 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   Timer? _initRetryTimer;
   bool _initRetryDone = false;
 
+  // Erkennen wenn die tv.* Session abgelaufen ist und der Server uns auf
+  // signin.volleyballworld.com (oder eine tv.*/login-Variante) umleitet.
+  // Nur einmal feuern, sonst kommt's beim about:blank in dispose() nochmal.
+  bool _loginRedirectFired = false;
+  void _handleLoginRedirect(String url) {
+    if (_loginRedirectFired) return;
+    _loginRedirectFired = true;
+    debugPrint('[player] session expired, redirected to: $url — closing player');
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.pop(context, 'needs_login');
+    }
+  }
+
+  static bool _isLoginRedirect(String url) {
+    if (url.isEmpty) return false;
+    if (url == 'about:blank') return false;
+    if (url.startsWith('https://signin.volleyballworld.com')) return true;
+    if (url.startsWith('https://tv.volleyballworld.com/login')) return true;
+    return false;
+  }
+
   void _markPlayerReady() {
     _initRetryTimer?.cancel();
     _initRetryTimer = null;
@@ -2765,7 +2857,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             })();
           ''');
         },
-        onPageFinished: (_) {
+        onPageFinished: (url) {
+          if (_isLoginRedirect(url)) {
+            _handleLoginRedirect(url);
+            return;
+          }
           _onPageFinished();
           // Fallback: nur wenn ready-Event und play-Event nie kommen
           Future.delayed(const Duration(seconds: 2), () {
@@ -3527,7 +3623,12 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           return NavigationActionPolicy.ALLOW;
         },
         onLoadStop: (controller, url) async {
-          debugPrint('[bvctv-player] onLoadStop: $url');
+          final urlStr = url?.toString() ?? '';
+          debugPrint('[bvctv-player] onLoadStop: $urlStr');
+          if (_isLoginRedirect(urlStr)) {
+            _handleLoginRedirect(urlStr);
+            return;
+          }
           final ls = await controller.evaluateJavascript(source: 'JSON.stringify(Object.keys(localStorage))');
           debugPrint('[bvctv-player] localStorage keys: $ls');
           _onPageFinished();
