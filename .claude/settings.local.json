@@ -373,7 +373,9 @@
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell pm list packages | Select-String -Pattern \"bvctv|vbtv|volleyball\")",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 shell monkey -p com.example.vbtv_app -c android.intent.category.LAUNCHER 1 2>&1 | Select-Object -Last 3)",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.74.apk\" -Force)",
-      "Bash(git -c user.email=simon.heinrici@mhdirekt.com -c 'user.name=Simon Heinrici' commit -m 'Release v1.0.74: Auto-Login mit gespeicherten Credentials *)"
+      "Bash(git -c user.email=simon.heinrici@mhdirekt.com -c 'user.name=Simon Heinrici' commit -m 'Release v1.0.74: Auto-Login mit gespeicherten Credentials *)",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.54:5555 | Out-Null; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.75.apk\" -Force)",
+      "Bash(git -c user.email=simon.heinrici@mhdirekt.com -c 'user.name=Simon Heinrici' commit -m 'Release v1.0.75: Fix Login-Strand auf tv.* Homepage + offline_access raus *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie"

@@ -58,9 +58,11 @@ class _LoginScreenState extends State<LoginScreen> {
       'response_type': 'code',
       'client_id': _clientId,
       'redirect_uri': _redirectUri,
-      // offline_access fordert vom OIDC-Server einen refresh_token an
-      // (siehe AuthService.refresh), damit der Login nicht nach ~24h vergessen wird.
-      'scope': 'openid email profile offline_access',
+      // offline_access wird von signin.volleyballworld.com NICHT unterstützt —
+      // Server returnt error=invalid_request beim /authorize. Daher zurück auf
+      // standard scope ohne refresh_token. Stattdessen: gespeicherte Credentials
+      // füllen das Login-Formular automatisch aus.
+      'scope': 'openid email profile',
       'code_challenge': _generateCodeChallenge(codeVerifier),
       'code_challenge_method': 'S256',
       'prompt': 'login',
@@ -637,7 +639,9 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                           final url = action.request.url?.toString() ?? '';
                           debugPrint('[bvctv-login] shouldOverrideUrlLoading: $url');
                           if (url.startsWith(widget.redirectUri)) {
-                            final code = Uri.parse(url).queryParameters['code'];
+                            final params = Uri.parse(url).queryParameters;
+                            final code = params['code'];
+                            final error = params['error'];
                             if (code != null && code.isNotEmpty) {
                               // ALLOW statt CANCEL: Server-Callback muss laufen damit
                               // Session-Cookies auf tv.volleyballworld.com gesetzt werden
@@ -645,6 +649,13 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                               // Pop passiert in onLoadStop nachdem die Seite geladen hat.
                               _pendingCode = code;
                               debugPrint('[bvctv-login] code received, letting redirect complete (len=${code.length})');
+                            } else if (error != null && error.isNotEmpty) {
+                              // OIDC-Fehler (z.B. invalid_request, access_denied) — sonst landet
+                              // der WebView auf tv.volleyballworld.com/ und der User strandet
+                              // auf der Homepage ohne Login-UI.
+                              debugPrint('[bvctv-login] OIDC error: $error desc=${params['error_description']}');
+                              if (mounted) Navigator.of(context).pop(null);
+                              return NavigationActionPolicy.CANCEL;
                             }
                           }
                           return NavigationActionPolicy.ALLOW;

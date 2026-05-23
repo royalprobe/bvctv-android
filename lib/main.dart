@@ -65,6 +65,19 @@ class _SessionGateState extends State<_SessionGate> {
 
   Future<void> _run() async {
     const storage = FlutterSecureStorage();
+
+    // Hinweis: signin.volleyballworld.com unterstützt offline_access nicht
+    // (siehe Kommentar in login_screen.dart), also haben wir nie einen
+    // refresh_token. Falls doch einer gespeichert ist (z.B. Server-Update
+    // in der Zukunft), versuchen wir den Refresh-Flow.
+    final refreshToken = await storage.read(key: 'refresh_token');
+    if (refreshToken == null || refreshToken.isEmpty) {
+      if (mounted) {
+        setState(() => _next = HomeScreen(accessToken: widget.initialToken));
+      }
+      return;
+    }
+
     final savedAtStr = await storage.read(key: 'token_saved_at');
     final savedAt = int.tryParse(savedAtStr ?? '0') ?? 0;
     final ageMs = DateTime.now().millisecondsSinceEpoch - savedAt;
@@ -85,15 +98,12 @@ class _SessionGateState extends State<_SessionGate> {
       return;
     }
 
-    // Bei success: Cookies auf tv.volleyballworld.com auch erneuern
     String token = widget.initialToken;
     if (result == AuthRefreshResult.success) {
       final newToken = await storage.read(key: 'access_token');
       if (newToken != null && newToken.isNotEmpty) token = newToken;
       await AuthService.refreshTvCookies(token);
     }
-    // Bei error: alter Token bleibt, weiter nutzen — nächste Session probiert nochmal.
-
     if (mounted) setState(() => _next = HomeScreen(accessToken: token));
   }
 
