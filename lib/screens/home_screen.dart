@@ -959,6 +959,18 @@ class _HomeScreenState extends State<HomeScreen> {
         };
       })).then((r) => r.whereType<Map<String, String>>().toList());
 
+      // Dynamische Laola1-Listen (HTML-Scrape) parallel laden – Tour Pro etc.
+      final laolaDynamicF = Future.wait(_laolaDynamicPlaylists.map((config) async {
+        final data = await _fetchLaolaList(config);
+        if (data == null) return null;
+        _laolaListCache[config['id']!] = data;
+        return <String, String>{
+          'id': config['id']!,
+          'title': data['title'] as String,
+          'matchDate': data['sortDate'] as String,
+        };
+      })).then((r) => r.whereType<Map<String, String>>().toList());
+
       // Laola1-Turniere: kein API-Call, nur statisches Datum + Titel
       final laolaTournaments = _laolaTournamentData.map((lt) => {
             'id': lt['id'] as String,
@@ -968,7 +980,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final realTournaments = await realTournamentsF;
       final youtubeTournaments = await youtubeTournamentsF;
-      final results = [...realTournaments, ...youtubeTournaments, ...laolaTournaments];
+      final laolaDynamicTournaments = await laolaDynamicF;
+      final results = [
+        ...realTournaments,
+        ...youtubeTournaments,
+        ...laolaDynamicTournaments,
+        ...laolaTournaments,
+      ];
 
       // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
       int titleYear(String t) {
@@ -1017,6 +1035,104 @@ class _HomeScreenState extends State<HomeScreen> {
   // Cache der RSS-Ergebnisse (Title + Latest-Date + Entries)
   // Befüllt in _loadTournamentList, gelesen in _loadVideos.
   final Map<String, Map<String, dynamic>> _youtubeCache = {};
+
+  // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
+  // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
+  // gelesen. So bleiben die Listen auch nach Neustart aktuell.
+  static const List<Map<String, String>> _laolaDynamicPlaylists = [
+    {
+      'id': '__laola_tour_pro__',
+      'title': 'win2day Beach Volleyball Tour Pro',
+      'baseUrl':
+          'https://www.laola1.at/de/daten/videos/beachvolleyball/win2day-beachvolleyball-tour-pro/',
+      'pages': '4',
+    },
+  ];
+  final Map<String, Map<String, dynamic>> _laolaListCache = {};
+
+  Future<Map<String, dynamic>?> _fetchLaolaList(
+      Map<String, String> config) async {
+    final baseUrl = config['baseUrl']!;
+    final pages = int.tryParse(config['pages'] ?? '1') ?? 1;
+    try {
+      // Pages parallel fetchen damit's nicht 4× nacheinander dauert.
+      final pageBodies = await Future.wait(List.generate(pages, (i) async {
+        final url = i == 0 ? baseUrl : '$baseUrl?page=${i + 1}';
+        try {
+          final res = await http
+              .get(Uri.parse(url), headers: {'User-Agent': 'Mozilla/5.0'})
+              .timeout(const Duration(seconds: 10));
+          return res.statusCode == 200 ? res.body : '';
+        } catch (_) {
+          return '';
+        }
+      }));
+
+      final entries = <Map<String, String>>[];
+      final seen = <String>{};
+      // <a href=".../de/video/player/{id}/{slug}" class="t-big">
+      //   <picture><img src="{thumb}?v=YYYYMMDD..." alt="{title}">
+      final pattern = RegExp(
+        r'<a href="https://www\.laola1\.at/de/video/player/(\d+)[^"]*"[^>]*class="t-big"[^>]*>\s*<picture[^>]*>\s*<img\s+src="([^"]+)"[^>]*alt="([^"]*)"',
+        dotAll: true,
+      );
+      String latestDate = '';
+      for (final body in pageBodies) {
+        if (body.isEmpty) continue;
+        for (final m in pattern.allMatches(body)) {
+          final id = m.group(1)!;
+          if (!seen.add(id)) continue;
+          final thumb = m.group(2)!;
+          final title = _decodeHtml(m.group(3)!).trim();
+          final dateMatch =
+              RegExp(r'\?v=(\d{4})(\d{2})(\d{2})').firstMatch(thumb);
+          final dateStr = dateMatch != null
+              ? '${dateMatch.group(1)}-${dateMatch.group(2)}-${dateMatch.group(3)}'
+              : '';
+          if (dateStr.isNotEmpty &&
+              (latestDate.isEmpty || dateStr.compareTo(latestDate) > 0)) {
+            latestDate = dateStr;
+          }
+          entries.add({
+            'videoId': id,
+            'title': title,
+            'thumbnail': thumb,
+            'date': dateStr,
+            'url': 'https://www.laola1.at/de/video/player/$id',
+          });
+        }
+      }
+
+      if (entries.isEmpty) return null;
+      // Neueste zuerst — Laola listet schon so, aber sicherstellen.
+      entries.sort((a, b) => (b['date'] ?? '').compareTo(a['date'] ?? ''));
+
+      return {
+        'id': config['id']!,
+        'title': config['title']!,
+        'sortDate': latestDate,
+        'entries': entries,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _decodeHtml(String s) {
+    return s
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&auml;', 'ä')
+        .replaceAll('&ouml;', 'ö')
+        .replaceAll('&uuml;', 'ü')
+        .replaceAll('&Auml;', 'Ä')
+        .replaceAll('&Ouml;', 'Ö')
+        .replaceAll('&Uuml;', 'Ü')
+        .replaceAll('&szlig;', 'ß');
+  }
 
   static String _decodeXmlEntities(String s) {
     return s
@@ -1179,6 +1295,41 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Laola1-Turnier: Liste mit hardcoded URLs/Thumbnails, kein API-Call.
       if (pid.startsWith('__laola_')) {
+        // Dynamische Laola-Liste (z.B. Tour Pro) – Cache wurde in
+        // _loadTournamentList befüllt; fallback: jetzt fetchen.
+        final dynConfig = _laolaDynamicPlaylists
+            .firstWhere((c) => c['id'] == pid, orElse: () => const {});
+        if (dynConfig.isNotEmpty) {
+          Map<String, dynamic>? data = _laolaListCache[pid];
+          data ??= await _fetchLaolaList(dynConfig);
+          if (data != null) {
+            _laolaListCache[pid] = data;
+            final tournamentName = data['title'] as String;
+            final entries = (data['entries'] as List).cast<Map<String, String>>();
+            final videos = entries.map((e) {
+              final dateStr = e['date'] ?? '';
+              return VideoItem(
+                id: e['videoId']!,
+                title: e['title']!,
+                teams: e['title']!,
+                gender: '',
+                round: '',
+                tournament: tournamentName,
+                thumbnailUrl: e['thumbnail'] ?? '',
+                duration: 0,
+                matchDate: dateStr.isNotEmpty ? DateTime.tryParse(dateStr) : null,
+                eventState: 'VOD_PUBLIC',
+                scheduledEnd: null,
+                linkUrl: e['url'],
+              );
+            }).toList();
+            if (_videosLoadEpoch == epoch && mounted) {
+              setState(() => _videos = videos);
+            }
+          }
+          return;
+        }
+
         final ltData = _laolaTournamentData
             .firstWhere((t) => t['id'] == pid, orElse: () => const {});
         if (ltData.isNotEmpty) {
