@@ -381,10 +381,19 @@
       "PowerShell(flutter analyze lib/main.dart lib/services/silent_login_flow.dart 2>&1)",
       "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.54:5555 | Out-Null; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.77.apk\" -Force)",
       "WebFetch(domain:www.laola1.at)",
-      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.54:5555 | Out-Null; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.78.apk\" -Force)"
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.54:5555 | Out-Null; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.78.apk\" -Force)",
+      "Bash(grep -oE '\\(data-[a-z-]+=\"[^\"]{1,150}\"|json|videoId|stream-id\\)' /tmp/laola.html)",
+      "Bash(grep -oE 'import\\\\\\([^\\)]+\\\\\\)|\\\\\\\\?[a-z0-9-]+\\\\\\\\.js' /tmp/bundle.js)",
+      "Bash(grep -oE '[Ss]pott[A-Za-z]*[^\"\\\\x27,;\\\\\\)]{0,80}' /tmp/bundle.js)",
+      "Bash(echo \"=== Find the spott player module chunk ===\" *)",
+      "Bash(grep -oE 'Bt=[^,;]{0,200}' /tmp/bundle.js)",
+      "Bash(grep -oE '.{40}video\\\\.laola1\\\\.at[^\"]{0,80}' /tmp/bundle.js)",
+      "PowerShell(flutter analyze lib/services/laola_stream_extractor.dart lib/screens/home_screen.dart 2>&1)",
+      "PowerShell($adb = \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb connect 192.168.0.54:5555 | Out-Null; & $adb -s 192.168.0.54:5555 install -r \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\"; Copy-Item \"c:\\\\Users\\\\Simon\\\\BVCTV\\\\build\\\\app\\\\outputs\\\\flutter-apk\\\\app-release.apk\" \"C:\\\\Users\\\\Simon\\\\Desktop\\\\BVCTV\\\\bvctv-v1.0.79.apk\" -Force)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie"
+      "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
+      "\\tmp"
     ]
   },
   "hooks": {

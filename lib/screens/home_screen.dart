@@ -19,6 +19,7 @@ import 'dart:io' show Platform;
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
 import '../services/auth_service.dart';
+import '../services/laola_stream_extractor.dart';
 
 class VideoItem {
   final String id;
@@ -1315,6 +1316,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openVideo(VideoItem video) {
+    if (video.isLaola) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => LaolaStreamExtractor(
+          pageUrl: video.linkUrl!,
+          title: '${video.tournament} – ${video.teams}'.trim(),
+        ),
+      ));
+      return;
+    }
     if (video.isExternal) {
       launchUrl(Uri.parse(video.linkUrl!), mode: LaunchMode.externalApplication);
       return;
