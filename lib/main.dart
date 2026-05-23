@@ -40,8 +40,11 @@ Future<void> _refreshSessionInBackground(String initialToken) async {
   final savedAtStr = await storage.read(key: 'token_saved_at');
   final savedAt = int.tryParse(savedAtStr ?? '0') ?? 0;
   final ageMs = DateTime.now().millisecondsSinceEpoch - savedAt;
+  // tv.*-Cookies leben empirisch nur wenige Stunden, der API-Token deutlich
+  // länger. Wenn der Token älter als 4h ist, lieber im Hintergrund eine
+  // frische Session ziehen — sonst landet der Player auf der VBW-Login-Seite.
   final isFresh =
-      savedAt > 0 && ageMs < const Duration(hours: 18).inMilliseconds;
+      savedAt > 0 && ageMs < const Duration(hours: 4).inMilliseconds;
   if (isFresh && initialToken.isNotEmpty) return;
 
   AuthState.isLoggingIn.value = true;
@@ -62,6 +65,10 @@ Future<void> _refreshSessionInBackground(String initialToken) async {
     if (savedEmail != null && savedEmail.isNotEmpty) {
       final newToken = await SilentLoginFlow.tryRelogin();
       if (newToken != null && newToken.isNotEmpty) {
+        // SilentLoginFlow folgt selbst dem OAuth-Redirect auf tv.*, aber wir
+        // pingen die Homepage nochmal explizit damit der Player garantiert
+        // mit gesetzten Session-Cookies startet.
+        await AuthService.refreshTvCookies(newToken);
         AuthState.token.value = newToken;
       }
     }

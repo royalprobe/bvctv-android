@@ -1550,26 +1550,36 @@ class _HomeScreenState extends State<HomeScreen> {
     ));
   }
 
-  /// Stellt sicher dass ein Token verfügbar ist, bevor der VBW-Player geöffnet
-  /// wird. Reihenfolge:
-  ///   1. Token bereits da → sofort weiter.
-  ///   2. Silent-Login läuft → Spinner-Dialog (max 8s, cancel-bar).
+  /// Stellt sicher dass eine frische Session verfügbar ist, bevor der VBW-Player
+  /// geöffnet wird. Reihenfolge:
+  ///   1. Silent-Login läuft → Spinner-Dialog warten (max 15s, cancel-bar).
+  ///      Auch wenn ein alter Token in [AuthState] steht: die tv.* Cookies
+  ///      könnten gerade erst erneuert werden, also IMMER warten.
+  ///   2. Token vorhanden → weiter.
   ///   3. Sonst → interaktiver LoginScreen wird gepushed.
   Future<bool> _ensureLoggedIn() async {
-    if (AuthState.token.value.isNotEmpty) return true;
-
     if (AuthState.isLoggingIn.value) {
-      final tokenFuture =
-          AuthState.waitForToken(timeout: const Duration(seconds: 8));
       bool cancelled = false;
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (ctx) {
-          tokenFuture.whenComplete(() {
+          void close() {
             try {
               if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
             } catch (_) {}
+          }
+          void listener() {
+            if (!AuthState.isLoggingIn.value) {
+              AuthState.isLoggingIn.removeListener(listener);
+              close();
+            }
+          }
+          AuthState.isLoggingIn.addListener(listener);
+          // Safety-Timeout: SilentLoginFlow dauert i.d.R. 3-15s
+          Timer(const Duration(seconds: 15), () {
+            AuthState.isLoggingIn.removeListener(listener);
+            close();
           });
           return AlertDialog(
             backgroundColor: const Color(0xFF1A1A1A),
@@ -1602,8 +1612,9 @@ class _HomeScreenState extends State<HomeScreen> {
         },
       );
       if (cancelled) return false;
-      if (AuthState.token.value.isNotEmpty) return true;
     }
+
+    if (AuthState.token.value.isNotEmpty) return true;
 
     if (!mounted) return false;
     await Navigator.push(
