@@ -170,6 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSettings();
     _loadTournamentList();
     _loadLiveAndUpcoming();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowNoCredsHint());
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted && _liveVideos.isEmpty) _loadLiveAndUpcoming();
@@ -544,6 +545,115 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
                 child: Text(S.save,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// Wird genau einmal pro App-Start nach dem ersten Frame aufgerufen. Liest
+  /// drei Keys aus SecureStorage parallel (sub-Millisekunde) — zeigt den
+  /// Hinweis-Dialog nur wenn weder Email noch Passwort gespeichert sind UND
+  /// der User den Hinweis noch nicht weggedrückt hat.
+  Future<void> _maybeShowNoCredsHint() async {
+    if (!mounted) return;
+    final results = await Future.wait([
+      _storage.read(key: 'saved_email'),
+      _storage.read(key: 'saved_password'),
+      _storage.read(key: 'hide_no_creds_hint'),
+    ]);
+    final hasEmail = (results[0] ?? '').isNotEmpty;
+    final hasPw = (results[1] ?? '').isNotEmpty;
+    final hidden = (results[2] ?? '') == '1';
+    if (hasEmail && hasPw) return;
+    if (hidden) return;
+    if (!mounted) return;
+    _showNoCredsHintDialog();
+  }
+
+  Future<void> _showNoCredsHintDialog() async {
+    if (!mounted) return;
+    bool dontShowAgain = false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) {
+          Future<void> persistHide() async {
+            if (dontShowAgain) {
+              await _storage.write(key: 'hide_no_creds_hint', value: '1');
+            }
+          }
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            title: Row(children: [
+              const Icon(Icons.info_outline, color: Colors.orange, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  S.isEn
+                      ? 'Sign-in for VBW videos'
+                      : 'Anmeldung für VBW-Videos',
+                  style: const TextStyle(color: Colors.white, fontSize: 17),
+                ),
+              ),
+            ]),
+            contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  S.isEn
+                      ? 'Without saved credentials only YouTube and Laola videos can be watched. VBW streams need an account.'
+                      : 'Ohne gespeicherte Anmeldedaten lassen sich nur YouTube- und Laola-Videos schauen. VBW-Streams brauchen einen Account.',
+                  style: const TextStyle(
+                      color: Colors.white70, fontSize: 14, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  value: dontShowAgain,
+                  onChanged: (v) =>
+                      setDialog(() => dontShowAgain = v ?? false),
+                  title: Text(
+                    S.isEn ? "Don't show again" : 'Nicht mehr zeigen',
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 13),
+                  ),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  activeColor: Colors.orange,
+                  checkColor: Colors.black,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await persistHide();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: Text(
+                  S.isEn ? 'Later' : 'Später',
+                  style: const TextStyle(color: Colors.white54),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () async {
+                  await persistHide();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) _showSavedCredentialsDialog(context);
+                },
+                child: Text(
+                  S.isEn ? 'Enter credentials' : 'Anmeldedaten eingeben',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           );
