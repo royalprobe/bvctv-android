@@ -138,7 +138,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _initPlayer() async {
     final url = await _pickBestVariantUrl(widget.streamUrl);
-    _controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    // Akamai signed URLs für Laola-VOD-Aufnahmen prüfen den Referer-Header bei
+    // jedem Segment-Request. Ohne diese Headers liefert die CDN 403, auch wenn
+    // das Master-m3u8 selbst noch erreichbar war.
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(url),
+      httpHeaders: const {
+        'Referer': 'https://www.laola1.at/',
+        'Origin': 'https://www.laola1.at',
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+      },
+    );
     await _controller.initialize();
     setState(() {
       _isInitialized = true;
