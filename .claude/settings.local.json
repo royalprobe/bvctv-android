@@ -435,7 +435,16 @@
       "PowerShell(python deploy_update.py -m \"Laola-Player: _pickBestVariantUrl rausgeworfen \\(verursachte 403 bei VOD-Streams\\), gebe Master direkt an ExoPlayer mit Referer/Origin/UA\")",
       "Bash(mkdir -p /tmp/vbal && cd /tmp/vbal *)",
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; \"logcat cleared - bitte einen funktionierenden Stream \\(z.B. Center Court \\(2\\)\\) oeffnen, ~5s warten, dann 'fertig' melden\")",
-      "PowerShell(python deploy_update.py -m \"Laola-Player: Qualitaets-Indikator \\(z.B. '1080p'\\) oben rechts fuer die ersten 30s, updated live bei ABR-Switches\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Player: Qualitaets-Indikator \\(z.B. '1080p'\\) oben rechts fuer die ersten 30s, updated live bei ABR-Switches\")",
+      "Bash(cp /tmp/vbal/general.css /c/Users/Simon/beachliga/public/css/general.css)",
+      "Bash(cp /tmp/vbal/style.css /c/Users/Simon/beachliga/public/css/style.css)",
+      "Bash(cp /tmp/vbal/media.css /c/Users/Simon/beachliga/public/css/media.css)",
+      "Bash(cp /tmp/vbal/vvvlogo.jpeg /c/Users/Simon/beachliga/public/dokumente/logos/vvvlogo.jpeg)",
+      "Bash(cp /tmp/vbal/script.js /c/Users/Simon/beachliga/public/js/script.js)",
+      "Bash(sed -i 's|return fetch\\(url, {|return fetch\\(url.startsWith\\(\"http\"\\) || url.startsWith\\(\"/\"\\) ? url : \"/api/vbal/\" + url, {|' /c/Users/Simon/beachliga/public/js/script.js)",
+      "Bash(sed -i 's|const response = await fetch\\(\"signup.php\",|const response = await fetch\\(\"/api/vbal/signup.php\",|' /c/Users/Simon/beachliga/public/js/script.js)",
+      "PowerShell(Start-Process \"http://localhost:3000/\")",
+      "PowerShell(python deploy_update.py -m \"Laola-Player: Master selbst fetchen via HttpClient, Set-Cookie extrahieren, hoechste Variant + Cookie an ExoPlayer geben \\(Fallback auf Master+ABR wenn pick fehlschlaegt\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",

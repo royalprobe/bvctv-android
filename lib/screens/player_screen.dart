@@ -2,7 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'dart:async';
+import 'dart:io';
 import '../l10n/strings.dart';
+
+class _BestVariant {
+  final String url;
+  final int height;
+  final int bandwidth;
+  final String cookieHeader;
+  const _BestVariant(this.url, this.height, this.bandwidth, this.cookieHeader);
+}
 
 class PlayerScreen extends StatefulWidget {
   final String title;
@@ -88,21 +97,84 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return KeyEventResult.ignored;
   }
 
+  /// Fetcht das Master-m3u8 selbst (über dart:io HttpClient damit wir Set-
+  /// Cookie-Header lesen können), parsed die Variants, und gibt die beste
+  /// (höchste Auflösung, sonst höchste Bitrate) zurück. Cookies aus der
+  /// Master-Response werden gesammelt und müssen anschließend an ExoPlayer
+  /// gegeben werden — sonst antwortet Akamai mit 403 auf die Variant-/Segment-
+  /// Requests. Liefert null wenn was schiefgeht (Caller fällt auf Master+ABR
+  /// zurück).
+  Future<_BestVariant?> _pickBestVariantWithCookies(String masterUrl) async {
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      try {
+        final req = await client.getUrl(Uri.parse(masterUrl));
+        req.headers.set('Referer', 'https://www.laola1.at/');
+        req.headers.set('Origin', 'https://www.laola1.at');
+        req.headers.set('User-Agent',
+            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
+        final res = await req.close().timeout(const Duration(seconds: 4));
+        if (res.statusCode != 200) {
+          debugPrint('[laola-player] master fetch HTTP ${res.statusCode}');
+          return null;
+        }
+        final cookiePairs = res.cookies
+            .map((c) => '${c.name}=${c.value}')
+            .toList();
+        final cookieHeader = cookiePairs.join('; ');
+        final body = await res.transform(const SystemEncoding().decoder).join();
+        final lines = body.split('\n');
+        final base = Uri.parse(masterUrl);
+        int bestHeight = 0;
+        int bestBw = -1;
+        String? bestUrl;
+        for (var i = 0; i < lines.length - 1; i++) {
+          final l = lines[i].trim();
+          if (!l.startsWith('#EXT-X-STREAM-INF')) continue;
+          final next = lines[i + 1].trim();
+          if (next.isEmpty || next.startsWith('#')) continue;
+          final bw = int.tryParse(
+                  RegExp(r'BANDWIDTH=(\d+)').firstMatch(l)?.group(1) ?? '0') ??
+              0;
+          final resm = RegExp(r'RESOLUTION=\d+x(\d+)').firstMatch(l);
+          final height = resm != null ? int.parse(resm.group(1)!) : 0;
+          if (height > bestHeight ||
+              (height == bestHeight && bw > bestBw)) {
+            bestHeight = height;
+            bestBw = bw;
+            bestUrl = base.resolve(next).toString();
+          }
+        }
+        if (bestUrl == null) return null;
+        debugPrint(
+            '[laola-player] picked variant ${bestHeight}p ($bestBw bps), '
+            'cookies=${cookiePairs.length}');
+        return _BestVariant(bestUrl, bestHeight, bestBw, cookieHeader);
+      } finally {
+        client.close(force: true);
+      }
+    } catch (e) {
+      debugPrint('[laola-player] variant-pick failed: $e — fallback to master');
+      return null;
+    }
+  }
+
   Future<void> _initPlayer() async {
-    // Master-URL direkt an ExoPlayer geben — keine eigene Variant-Auswahl mehr.
-    // Hintergrund: die Laola-VOD-Streams haben absolute Variant-URLs mit
-    // eigenen hdntc-Auth-Tokens, die im _pickBestVariantUrl-Pfad zu 403
-    // führten. ExoPlayer macht ABR + folgt Auth-Redirects intern korrekt.
-    // Referer/Origin/UA bleiben gesetzt, weil die Akamai-CDN den Header bei
-    // jedem Segment-Request prüft.
+    // Versuche zuerst die höchste Variante zu pinnen (mit Cookies aus dem
+    // Master-Response). Wenn das schiefgeht, fällt's auf Master+ABR zurück.
+    final best = await _pickBestVariantWithCookies(widget.streamUrl);
+    final playUrl = best?.url ?? widget.streamUrl;
+    final headers = <String, String>{
+      'Referer': 'https://www.laola1.at/',
+      'Origin': 'https://www.laola1.at',
+      'User-Agent':
+          'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+      if (best != null && best.cookieHeader.isNotEmpty)
+        'Cookie': best.cookieHeader,
+    };
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.streamUrl),
-      httpHeaders: const {
-        'Referer': 'https://www.laola1.at/',
-        'Origin': 'https://www.laola1.at',
-        'User-Agent':
-            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-      },
+      Uri.parse(playUrl),
+      httpHeaders: headers,
     );
     await _controller.initialize();
     setState(() {
