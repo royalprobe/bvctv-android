@@ -1,18 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
 import 'dart:async';
 import '../l10n/strings.dart';
-
-class _HlsVariant {
-  final int bandwidth;
-  final int height;
-  final String url;
-  const _HlsVariant(this.bandwidth, this.height, this.url);
-  String get label =>
-      height > 0 ? '${height}p' : '${(bandwidth / 1000).round()} kbps';
-}
 
 class PlayerScreen extends StatefulWidget {
   final String title;
@@ -92,57 +82,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return KeyEventResult.ignored;
   }
 
-  Future<String> _pickBestVariantUrl(String masterUrl) async {
-    // Laola1 liefert eine HLS-Master-Playlist mit mehreren Bitrates. ExoPlayer
-    // würde sonst per ABR variabel skalieren — wir fixieren stattdessen auf
-    // die höchstauflösende Variante.
-    try {
-      final res = await http.get(
-        Uri.parse(masterUrl),
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Referer': 'https://www.laola1.at/',
-        },
-      ).timeout(const Duration(seconds: 4));
-      if (res.statusCode != 200) return masterUrl;
-      final lines = res.body.split('\n');
-      final base = Uri.parse(masterUrl);
-      final variants = <_HlsVariant>[];
-      for (var i = 0; i < lines.length - 1; i++) {
-        final l = lines[i].trim();
-        if (!l.startsWith('#EXT-X-STREAM-INF')) continue;
-        final next = lines[i + 1].trim();
-        if (next.isEmpty || next.startsWith('#')) continue;
-        final bw = int.tryParse(
-                RegExp(r'BANDWIDTH=(\d+)').firstMatch(l)?.group(1) ?? '0') ??
-            0;
-        final resm = RegExp(r'RESOLUTION=\d+x(\d+)').firstMatch(l);
-        final height = resm != null ? int.parse(resm.group(1)!) : 0;
-        variants
-            .add(_HlsVariant(bw, height, base.resolve(next).toString()));
-      }
-      if (variants.isEmpty) return masterUrl;
-      variants.sort((a, b) {
-        if (a.height != b.height) return b.height.compareTo(a.height);
-        return b.bandwidth.compareTo(a.bandwidth);
-      });
-      debugPrint(
-          '[laola-player] picked best variant: ${variants.first.label} '
-          '(${variants.first.bandwidth} bps) — ${variants.length} variants total');
-      return variants.first.url;
-    } catch (e) {
-      debugPrint('[laola-player] variant-pick failed: $e — using master URL');
-      return masterUrl;
-    }
-  }
-
   Future<void> _initPlayer() async {
-    final url = await _pickBestVariantUrl(widget.streamUrl);
-    // Akamai signed URLs für Laola-VOD-Aufnahmen prüfen den Referer-Header bei
-    // jedem Segment-Request. Ohne diese Headers liefert die CDN 403, auch wenn
-    // das Master-m3u8 selbst noch erreichbar war.
+    // Master-URL direkt an ExoPlayer geben — keine eigene Variant-Auswahl mehr.
+    // Hintergrund: die Laola-VOD-Streams haben absolute Variant-URLs mit
+    // eigenen hdntc-Auth-Tokens, die im _pickBestVariantUrl-Pfad zu 403
+    // führten. ExoPlayer macht ABR + folgt Auth-Redirects intern korrekt.
+    // Referer/Origin/UA bleiben gesetzt, weil die Akamai-CDN den Header bei
+    // jedem Segment-Request prüft.
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(url),
+      Uri.parse(widget.streamUrl),
       httpHeaders: const {
         'Referer': 'https://www.laola1.at/',
         'Origin': 'https://www.laola1.at',

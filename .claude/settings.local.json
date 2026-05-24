@@ -431,7 +431,8 @@
       "PowerShell(foreach \\($id in @\\(2166461, 2166462, 2166463, 2166464, 2166465, 2166466, 2166467\\)\\) { try { $r = Invoke-WebRequest -Uri \"https://www.laola1.at/de/video/player/$id\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} -MaximumRedirection 0 -ErrorAction Stop; \"$id : $\\($r.StatusCode\\) len=$\\($r.Content.Length\\)\" } catch { \"$id : $\\($_.Exception.Response.StatusCode.value__\\) $\\($_.Exception.Message.Split\\([Environment]::NewLine\\)[0]\\)\" } })",
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; \"logcat cleared - jetzt bitte einen der neuen Streams oeffnen und ~10s warten\")",
       "PowerShell(python deploy_update.py -m \"Laola-Player: Referer + Origin + UA in ExoPlayer-Requests \\(Akamai CDN lehnt sonst Variant-Segmente mit 403 ab bei den neuen VOD-Streams\\)\")",
-      "PowerShell(python deploy_update.py -m \"Poertschach: tote Streams 2166461-63 entfernt; 2166466+67 ueber availableFrom-Feld erst ab 2026-05-25 sichtbar\")"
+      "PowerShell(python deploy_update.py -m \"Poertschach: tote Streams 2166461-63 entfernt; 2166466+67 ueber availableFrom-Feld erst ab 2026-05-25 sichtbar\")",
+      "PowerShell(python deploy_update.py -m \"Laola-Player: _pickBestVariantUrl rausgeworfen \\(verursachte 403 bei VOD-Streams\\), gebe Master direkt an ExoPlayer mit Referer/Origin/UA\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
