@@ -1091,16 +1091,27 @@ class _HomeScreenState extends State<HomeScreen> {
         };
       })).then((r) => r.whereType<Map<String, String>>().toList());
 
-      // Laola1-Turniere: kein API-Call, nur statisches Datum + Titel
-      final laolaTournaments = _laolaTournamentData.map((lt) => {
-            'id': lt['id'] as String,
-            'title': lt['title'] as String,
-            'matchDate': lt['matchDate'] as String,
-          }).toList();
+      // Laola1-Turniere: pro Tournament gegen /access/hls checken welche
+      // Streams gerade live sind. Tournaments mit 0 verfügbaren Streams gar
+      // nicht in die Liste aufnehmen. Cache wird in _loadVideos wiederverwendet.
+      final laolaTournamentsF = Future.wait(_laolaTournamentData.map((lt) async {
+        final tournId = lt['id'] as String;
+        final videos = (lt['videos'] as List).cast<Map<String, String>>();
+        final ids = videos.map((v) => v['id']!).toList();
+        final avail = await _fetchLaolaAvailability(ids);
+        _laolaAvailCache[tournId] = avail;
+        if (!avail.values.any((v) => v)) return null;
+        return <String, String>{
+          'id': tournId,
+          'title': lt['title'] as String,
+          'matchDate': lt['matchDate'] as String,
+        };
+      })).then((r) => r.whereType<Map<String, String>>().toList());
 
       final realTournaments = await realTournamentsF;
       final youtubeTournaments = await youtubeTournamentsF;
       final laolaDynamicTournaments = await laolaDynamicF;
+      final laolaTournaments = await laolaTournamentsF;
       final results = [
         ...realTournaments,
         ...youtubeTournaments,
@@ -1155,6 +1166,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // Cache der RSS-Ergebnisse (Title + Latest-Date + Entries)
   // Befüllt in _loadTournamentList, gelesen in _loadVideos.
   final Map<String, Map<String, dynamic>> _youtubeCache = {};
+
+  // Cache der Laola-Stream-Verfügbarkeit pro Tournament: tournamentId →
+  // (videoId → live). Befüllt in _loadTournamentList (für Tournament-Hide),
+  // wiederverwendet in _loadVideos (für Video-Filter) damit nicht doppelt
+  // gegen /access/hls gepostet wird.
+  final Map<String, Map<String, bool>> _laolaAvailCache = {};
 
   // SWR-Cache für reguläre VBW-Playlists, virtuelle Turniere und __all__:
   // Cache-Hit zeigt die Liste sofort, dann läuft ein silent re-fetch im
@@ -1525,11 +1542,14 @@ class _HomeScreenState extends State<HomeScreen> {
           final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
           final allEntries =
               (ltData['videos'] as List).cast<Map<String, String>>();
-          // Laola-API pro Stream prüfen ob's gerade live ist (autoBroadcast /
-          // autoOffline-Fenster). Streams die noch nicht angefangen haben oder
-          // schon vorbei sind, gar nicht erst in der Liste zeigen.
-          final availability = await _fetchLaolaAvailability(
-              allEntries.map((e) => e['id']!).toList());
+          // Per-Stream Verfügbarkeit (POST /access/hls): wenn der Tournament-
+          // List-Load das gerade gemacht hat, kommt's aus dem Cache. Sonst
+          // jetzt fetchen (z.B. wenn der User direkt zu diesem Tournament
+          // springt ohne dass _loadTournamentList neu lief).
+          final availability = _laolaAvailCache[pid] ??
+              await _fetchLaolaAvailability(
+                  allEntries.map((e) => e['id']!).toList());
+          _laolaAvailCache[pid] = availability;
           final entries =
               allEntries.where((e) => availability[e['id']] ?? true).toList();
           final videos = entries.map((e) {

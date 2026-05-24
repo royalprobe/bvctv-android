@@ -460,7 +460,11 @@
       "PowerShell(python deploy_update.py -m \"Laola: pro Stream API checken \\(autoBroadcast/autoOffline\\), nur live-Streams in der Liste zeigen\")",
       "PowerShell(foreach \\($id in @\\(2166464, 2166465, 2166466, 2166467\\)\\) { try { $r = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/$id/access/hls\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'} -ErrorAction Stop; \"$id : status=$\\($r.StatusCode\\) bodyLen=$\\($r.Content.Length\\) snippet=$\\($r.Content.Substring\\(0,[Math]::Min\\(180,$r.Content.Length\\)\\)\\)\" } catch { \"$id : err=$\\($_.Exception.Response.StatusCode.value__\\) msg=$\\($_.Exception.Message.Split\\([Environment]::NewLine\\)[0]\\)\" } })",
       "PowerShell(foreach \\($id in @\\(2166464, 2166465, 2166466, 2166467\\)\\) { try { $r = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/$id/access/hls\" -Method POST -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'} -ErrorAction Stop; \"$id : status=$\\($r.StatusCode\\) snippet=$\\($r.Content.Substring\\(0,[Math]::Min\\(220,$r.Content.Length\\)\\)\\)\" } catch { $rd = $_.Exception.Response; $body = ''; if \\($rd\\) { try { $sr = New-Object IO.StreamReader\\($rd.GetResponseStream\\(\\)\\); $body = $sr.ReadToEnd\\(\\).Substring\\(0,[Math]::Min\\(220,9999\\)\\) } catch {} }; \"$id : err=$\\($rd.StatusCode.value__\\) body=$body\" } })",
-      "PowerShell(python deploy_update.py -m \"Laola-Availability: stattdessen /access/hls POST checken \\(200=live, 400=nicht verfuegbar\\) - Schedule-Window war zu ungenau\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Availability: stattdessen /access/hls POST checken \\(200=live, 400=nicht verfuegbar\\) - Schedule-Window war zu ungenau\")",
+      "Bash(pnpm tsc *)",
+      "Bash(ps -W)",
+      "Bash(tasklist)",
+      "PowerShell(python deploy_update.py -m \"Laola: Tournaments mit 0 verfuegbaren Streams werden gar nicht in der Liste angezeigt \\(Availability-Check im Tournament-Load + Cache fuer den Video-Load\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
