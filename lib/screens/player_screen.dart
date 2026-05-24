@@ -39,6 +39,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
   final FocusNode _rootFocusNode = FocusNode(debugLabel: 'LaolaPlayerRoot');
 
+  // Aktuelle Auflösung von ExoPlayer (ändert sich bei ABR-Switches). Für 30s
+  // nach Stream-Start sichtbar damit man die ABR-Konvergenz beobachten kann.
+  Size? _videoSize;
+  bool _showQualityIndicator = true;
+  Timer? _qualityIndicatorTimer;
+
   @override
   void initState() {
     super.initState();
@@ -102,9 +108,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {
       _isInitialized = true;
       _isPlaying = true;
+      _videoSize = _controller.value.size;
     });
     _controller.play();
     _startHideControlsTimer();
+    _qualityIndicatorTimer = Timer(const Duration(seconds: 30), () {
+      if (mounted) setState(() => _showQualityIndicator = false);
+    });
 
     // UI-Tick alle 500ms: Position synchronisieren und Video-Ende erkennen
     _uiTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
@@ -113,6 +123,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _fakePosition = value.position;
         _isPlaying = value.isPlaying;
+        _videoSize = value.size;
       });
       // Video zu Ende → auf schwarzen Bildschirm wechseln
       if (value.duration > Duration.zero &&
@@ -259,6 +270,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _seekTimer?.cancel();
     _uiTimer?.cancel();
     _blackScreenTimer?.cancel();
+    _qualityIndicatorTimer?.cancel();
     _rootFocusNode.dispose();
     _controller.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -341,6 +353,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               style: const TextStyle(color: Colors.white54, fontSize: 14),
                             ),
                           ],
+                        ),
+                      ),
+                    ),
+
+                  // Qualitäts-Indikator (oben rechts, erste 30s sichtbar,
+                  // updated live wenn ABR die Variante wechselt).
+                  if (_showQualityIndicator &&
+                      _videoSize != null &&
+                      _videoSize!.height > 0)
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: IgnorePointer(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                                color: Colors.orange.withValues(alpha: 0.7),
+                                width: 1),
+                          ),
+                          child: Text(
+                            '${_videoSize!.height.round()}p',
+                            style: const TextStyle(
+                              color: Colors.orange,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
                         ),
                       ),
                     ),

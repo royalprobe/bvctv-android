@@ -432,7 +432,10 @@
       "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; \"logcat cleared - jetzt bitte einen der neuen Streams oeffnen und ~10s warten\")",
       "PowerShell(python deploy_update.py -m \"Laola-Player: Referer + Origin + UA in ExoPlayer-Requests \\(Akamai CDN lehnt sonst Variant-Segmente mit 403 ab bei den neuen VOD-Streams\\)\")",
       "PowerShell(python deploy_update.py -m \"Poertschach: tote Streams 2166461-63 entfernt; 2166466+67 ueber availableFrom-Feld erst ab 2026-05-25 sichtbar\")",
-      "PowerShell(python deploy_update.py -m \"Laola-Player: _pickBestVariantUrl rausgeworfen \\(verursachte 403 bei VOD-Streams\\), gebe Master direkt an ExoPlayer mit Referer/Origin/UA\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Player: _pickBestVariantUrl rausgeworfen \\(verursachte 403 bei VOD-Streams\\), gebe Master direkt an ExoPlayer mit Referer/Origin/UA\")",
+      "Bash(mkdir -p /tmp/vbal && cd /tmp/vbal *)",
+      "PowerShell($adb = \"C:\\\\Users\\\\Simon\\\\AppData\\\\Local\\\\Android\\\\Sdk\\\\platform-tools\\\\adb.exe\"; & $adb -s 192.168.0.54:5555 logcat -c; \"logcat cleared - bitte einen funktionierenden Stream \\(z.B. Center Court \\(2\\)\\) oeffnen, ~5s warten, dann 'fertig' melden\")",
+      "PowerShell(python deploy_update.py -m \"Laola-Player: Qualitaets-Indikator \\(z.B. '1080p'\\) oben rechts fuer die ersten 30s, updated live bei ABR-Switches\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
