@@ -1322,27 +1322,6 @@ class _HomeScreenState extends State<HomeScreen> {
       'tournament': 'win2day PRO MASTERS Pörtschach',
       'videos': [
         {
-          'id': '2166461',
-          'title': 'Center Court',
-          'url': 'https://www.laola1.at/de/video/player/2166461',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/58de884f-bf67-4455-b058-454828f01e36.jpg',
-        },
-        {
-          'id': '2166462',
-          'title': 'Court 2',
-          'url': 'https://www.laola1.at/de/video/player/2166462',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/e9350bae-d5bc-4a9e-8158-55d1ab4bdd38.jpg',
-        },
-        {
-          'id': '2166463',
-          'title': 'Court 3',
-          'url': 'https://www.laola1.at/de/video/player/2166463',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/a1b52362-0704-4c5e-b16f-1656499500c0.jpg',
-        },
-        {
           'id': '2166464',
           'title': 'Center Court (2)',
           'url': 'https://www.laola1.at/de/video/player/2166464',
@@ -1356,12 +1335,16 @@ class _HomeScreenState extends State<HomeScreen> {
           'thumbnail':
               'https://video.laola1.at/image/800x450/48173962-5ca9-4d5a-aa95-b3955e960881.jpg',
         },
+        // availableFrom: ISO-Datum, ab dem der Stream live geht.
+        // Vorher in _loadVideos rausgefiltert damit der User nicht in den
+        // ewigen Spinner läuft.
         {
           'id': '2166466',
           'title': 'Center Court (3)',
           'url': 'https://www.laola1.at/de/video/player/2166466',
           'thumbnail':
               'https://video.laola1.at/image/800x450/d5306f03-26a8-4942-93b1-aae809ef6af7.jpg',
+          'availableFrom': '2026-05-25',
         },
         {
           'id': '2166467',
@@ -1369,6 +1352,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'url': 'https://www.laola1.at/de/video/player/2166467',
           'thumbnail':
               'https://video.laola1.at/image/800x450/7706cdb5-120e-4cde-8319-929d81bbf7cc.jpg',
+          'availableFrom': '2026-05-25',
         },
       ],
     },
@@ -1511,7 +1495,15 @@ class _HomeScreenState extends State<HomeScreen> {
           final tournamentName = ltData['tournament'] as String? ?? '';
           final dateStr = ltData['matchDate'] as String?;
           final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
-          final entries = (ltData['videos'] as List).cast<Map<String, String>>();
+          final now = DateTime.now();
+          final todayStr =
+              '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+          final entries = (ltData['videos'] as List)
+              .cast<Map<String, String>>()
+              .where((e) {
+            final from = e['availableFrom'];
+            return from == null || from.isEmpty || from.compareTo(todayStr) <= 0;
+          }).toList();
           final videos = entries.map((e) {
             return VideoItem(
               id: e['id']!,
