@@ -444,7 +444,10 @@
       "Bash(sed -i 's|return fetch\\(url, {|return fetch\\(url.startsWith\\(\"http\"\\) || url.startsWith\\(\"/\"\\) ? url : \"/api/vbal/\" + url, {|' /c/Users/Simon/beachliga/public/js/script.js)",
       "Bash(sed -i 's|const response = await fetch\\(\"signup.php\",|const response = await fetch\\(\"/api/vbal/signup.php\",|' /c/Users/Simon/beachliga/public/js/script.js)",
       "PowerShell(Start-Process \"http://localhost:3000/\")",
-      "PowerShell(python deploy_update.py -m \"Laola-Player: Master selbst fetchen via HttpClient, Set-Cookie extrahieren, hoechste Variant + Cookie an ExoPlayer geben \\(Fallback auf Master+ABR wenn pick fehlschlaegt\\)\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Player: Master selbst fetchen via HttpClient, Set-Cookie extrahieren, hoechste Variant + Cookie an ExoPlayer geben \\(Fallback auf Master+ABR wenn pick fehlschlaegt\\)\")",
+      "Bash(sed -n '125,140p' /tmp/vbal/script.js)",
+      "Bash(sed -n '225,255p' /tmp/vbal/script.js)",
+      "PowerShell(python deploy_update.py -m \"Laola-Extractor: laola1.at-Seite hinter schwarzem Lade-Screen+Spinner versteckt, JS-Hook laeuft unsichtbar im Hintergrund\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",

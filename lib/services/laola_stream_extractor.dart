@@ -30,7 +30,6 @@ class LaolaStreamExtractor extends StatefulWidget {
 class _LaolaStreamExtractorState extends State<LaolaStreamExtractor> {
   InAppWebViewController? _controller;
   bool _completed = false;
-  String _hint = 'Cookies akzeptieren um Stream zu laden';
 
   double _cursorX = 300;
   double _cursorY = 200;
@@ -187,146 +186,132 @@ class _LaolaStreamExtractorState extends State<LaolaStreamExtractor> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              color: const Color(0xFF1A1A1A),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+      body: Stack(
+        children: [
+          // WebView läuft unsichtbar im Hintergrund — JS-Hook fängt das m3u8
+          // ab und navigiert dann zum PlayerScreen. Der User sieht die laola-
+          // Seite zu keiner Zeit, nur den schwarzen Lade-Screen unten.
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (_, c) {
+                _webViewSize = Size(c.maxWidth, c.maxHeight);
+                return InAppWebView(
+                  initialUrlRequest:
+                      URLRequest(url: WebUri(widget.pageUrl)),
+                  initialSettings: InAppWebViewSettings(
+                    javaScriptEnabled: true,
+                    mediaPlaybackRequiresUserGesture: false,
+                    allowsInlineMediaPlayback: true,
+                    userAgent:
+                        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(widget.title,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 14)),
-                        Text(_hint,
-                            style: const TextStyle(
-                                color: Colors.orange, fontSize: 11)),
-                      ],
+                  initialUserScripts: UnmodifiableListView([
+                    UserScript(
+                      source: _captureScript,
+                      injectionTime:
+                          UserScriptInjectionTime.AT_DOCUMENT_START,
+                    ),
+                  ]),
+                  onWebViewCreated: (controller) {
+                    _controller = controller;
+                    controller.addJavaScriptHandler(
+                      handlerName: 'LaolaStream',
+                      callback: (args) {
+                        if (args.isEmpty || _completed) return;
+                        final url = args[0].toString();
+                        debugPrint(
+                            '[laola-extract] STREAM captured: $url');
+                        _finishWithStream(url);
+                      },
+                    );
+                    controller.addJavaScriptHandler(
+                      handlerName: 'LaolaTrace',
+                      callback: (args) {
+                        if (args.isEmpty) return;
+                        final s = args[0].toString();
+                        final short = s.length > 200
+                            ? '${s.substring(0, 200)}…'
+                            : s;
+                        debugPrint('[laola-extract] trace: $short');
+                      },
+                    );
+                  },
+                  onConsoleMessage: (controller, msg) {
+                    debugPrint(
+                        '[laola-extract] console.${msg.messageLevel}: ${msg.message}');
+                  },
+                  onLoadStop: (controller, url) {
+                    debugPrint('[laola-extract] page loaded: $url');
+                  },
+                  onReceivedError: (controller, request, error) {
+                    debugPrint(
+                        '[laola-extract] webview error: ${error.description} url=${request.url}');
+                  },
+                );
+              },
+            ),
+          ),
+
+          // Vollflächiges schwarzes Overlay deckt den WebView ab. Absorbiert
+          // auch Pointer-Events damit DPad/Klicks nicht versehentlich auf
+          // dem unsichtbaren Cookie-Banner landen.
+          const Positioned.fill(
+            child: AbsorbPointer(
+              child: ColoredBox(color: Colors.black),
+            ),
+          ),
+
+          // Lade-UI in der Mitte.
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(
+                    color: Colors.orange,
+                    strokeWidth: 3,
+                  ),
+                ),
+                const SizedBox(height: 28),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                  child: Text(
+                    widget.title,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ],
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Stream wird geladen…',
+                  style: TextStyle(color: Colors.white54, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+
+          // Back-Button oben links innerhalb der SafeArea.
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+                tooltip: 'Zurück',
               ),
             ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (_, c) {
-                  _webViewSize = Size(c.maxWidth, c.maxHeight);
-                  return Stack(
-                    children: [
-                      InAppWebView(
-                        initialUrlRequest:
-                            URLRequest(url: WebUri(widget.pageUrl)),
-                        initialSettings: InAppWebViewSettings(
-                          javaScriptEnabled: true,
-                          mediaPlaybackRequiresUserGesture: false,
-                          allowsInlineMediaPlayback: true,
-                          userAgent:
-                              'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                        ),
-                        initialUserScripts: UnmodifiableListView([
-                          UserScript(
-                            source: _captureScript,
-                            injectionTime:
-                                UserScriptInjectionTime.AT_DOCUMENT_START,
-                          ),
-                        ]),
-                        onWebViewCreated: (controller) {
-                          _controller = controller;
-                          controller.addJavaScriptHandler(
-                            handlerName: 'LaolaStream',
-                            callback: (args) {
-                              if (args.isEmpty || _completed) return;
-                              final url = args[0].toString();
-                              debugPrint(
-                                  '[laola-extract] STREAM captured: $url');
-                              _finishWithStream(url);
-                            },
-                          );
-                          controller.addJavaScriptHandler(
-                            handlerName: 'LaolaTrace',
-                            callback: (args) {
-                              if (args.isEmpty) return;
-                              final s = args[0].toString();
-                              final short = s.length > 200
-                                  ? '${s.substring(0, 200)}…'
-                                  : s;
-                              debugPrint('[laola-extract] trace: $short');
-                            },
-                          );
-                        },
-                        onConsoleMessage: (controller, msg) {
-                          debugPrint(
-                              '[laola-extract] console.${msg.messageLevel}: ${msg.message}');
-                        },
-                        onLoadStop: (controller, url) {
-                          debugPrint('[laola-extract] page loaded: $url');
-                          if (mounted) {
-                            setState(() => _hint =
-                                'Pfeiltasten → Cursor, Enter = Klicken');
-                          }
-                        },
-                        onReceivedError: (controller, request, error) {
-                          debugPrint(
-                              '[laola-extract] webview error: ${error.description} url=${request.url}');
-                        },
-                      ),
-                      Positioned(
-                        left: _cursorX,
-                        top: _cursorY,
-                        child: const IgnorePointer(child: _Cursor()),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _Cursor extends StatelessWidget {
-  const _Cursor();
-  @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: const Size(22, 26), painter: _CursorPainter());
-}
-
-class _CursorPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..moveTo(0, 0)
-      ..lineTo(0, 20)
-      ..lineTo(4.5, 15)
-      ..lineTo(8, 22)
-      ..lineTo(10.5, 21)
-      ..lineTo(7, 14)
-      ..lineTo(13, 14)
-      ..close();
-    canvas.drawPath(
-        path,
-        Paint()
-          ..color = Colors.black
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5
-          ..strokeJoin = StrokeJoin.round);
-    canvas.drawPath(
-        path, Paint()..color = Colors.white..style = PaintingStyle.fill);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter old) => false;
-}
