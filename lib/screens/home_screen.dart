@@ -1243,6 +1243,38 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// Fragt für jede Laola-Content-ID die Public-API ab und gibt zurück welche
+  /// gerade live sind. `autoBroadcast` / `autoOffline` aus der Response geben
+  /// das geplante Sendefenster in UTC. Bei Netz-/Parse-Fehler → true (Stream
+  /// sichtbar lassen, lieber falsch-positiv als guten Content verbergen).
+  Future<Map<String, bool>> _fetchLaolaAvailability(List<String> ids) async {
+    final now = DateTime.now().toUtc();
+    final results = await Future.wait(ids.map((id) async {
+      try {
+        final res = await http.get(
+          Uri.parse('https://video.laola1.at/api/v3/contents/$id'),
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://www.laola1.at/',
+          },
+        ).timeout(const Duration(seconds: 3));
+        if (res.statusCode != 200) return MapEntry(id, true);
+        final data = jsonDecode(res.body)['data'] as Map<String, dynamic>?;
+        if (data == null) return MapEntry(id, true);
+        final start = DateTime.tryParse(data['autoBroadcast'] as String? ?? '');
+        final end = DateTime.tryParse(data['autoOffline'] as String? ?? '');
+        if (start == null || end == null) return MapEntry(id, true);
+        final live = !now.isBefore(start) && now.isBefore(end);
+        debugPrint('[laola-avail] $id start=$start end=$end now=$now live=$live');
+        return MapEntry(id, live);
+      } catch (e) {
+        debugPrint('[laola-avail] $id failed: $e — defaulting to visible');
+        return MapEntry(id, true);
+      }
+    }));
+    return Map.fromEntries(results);
+  }
+
   static String _decodeHtml(String s) {
     return s
         .replaceAll('&amp;', '&')
@@ -1335,16 +1367,14 @@ class _HomeScreenState extends State<HomeScreen> {
           'thumbnail':
               'https://video.laola1.at/image/800x450/48173962-5ca9-4d5a-aa95-b3955e960881.jpg',
         },
-        // availableFrom: ISO-Datum, ab dem der Stream live geht.
-        // Vorher in _loadVideos rausgefiltert damit der User nicht in den
-        // ewigen Spinner läuft.
+        // Filtering passiert dynamisch in _loadVideos über _fetchLaolaAvailability
+        // (Laola-API liefert autoBroadcast / autoOffline-Fenster).
         {
           'id': '2166466',
           'title': 'Center Court (3)',
           'url': 'https://www.laola1.at/de/video/player/2166466',
           'thumbnail':
               'https://video.laola1.at/image/800x450/d5306f03-26a8-4942-93b1-aae809ef6af7.jpg',
-          'availableFrom': '2026-05-25',
         },
         {
           'id': '2166467',
@@ -1352,7 +1382,6 @@ class _HomeScreenState extends State<HomeScreen> {
           'url': 'https://www.laola1.at/de/video/player/2166467',
           'thumbnail':
               'https://video.laola1.at/image/800x450/7706cdb5-120e-4cde-8319-929d81bbf7cc.jpg',
-          'availableFrom': '2026-05-25',
         },
       ],
     },
@@ -1495,15 +1524,15 @@ class _HomeScreenState extends State<HomeScreen> {
           final tournamentName = ltData['tournament'] as String? ?? '';
           final dateStr = ltData['matchDate'] as String?;
           final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
-          final now = DateTime.now();
-          final todayStr =
-              '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-          final entries = (ltData['videos'] as List)
-              .cast<Map<String, String>>()
-              .where((e) {
-            final from = e['availableFrom'];
-            return from == null || from.isEmpty || from.compareTo(todayStr) <= 0;
-          }).toList();
+          final allEntries =
+              (ltData['videos'] as List).cast<Map<String, String>>();
+          // Laola-API pro Stream prüfen ob's gerade live ist (autoBroadcast /
+          // autoOffline-Fenster). Streams die noch nicht angefangen haben oder
+          // schon vorbei sind, gar nicht erst in der Liste zeigen.
+          final availability = await _fetchLaolaAvailability(
+              allEntries.map((e) => e['id']!).toList());
+          final entries =
+              allEntries.where((e) => availability[e['id']] ?? true).toList();
           final videos = entries.map((e) {
             return VideoItem(
               id: e['id']!,
@@ -1520,7 +1549,9 @@ class _HomeScreenState extends State<HomeScreen> {
               linkUrl: e['url'],
             );
           }).toList();
-          if (mounted) setState(() => _videos = videos);
+          if (_videosLoadEpoch == epoch && mounted) {
+            setState(() => _videos = videos);
+          }
         }
         return;
       }

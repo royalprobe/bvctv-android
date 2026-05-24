@@ -449,7 +449,15 @@
       "Bash(sed -n '225,255p' /tmp/vbal/script.js)",
       "PowerShell(python deploy_update.py -m \"Laola-Extractor: laola1.at-Seite hinter schwarzem Lade-Screen+Spinner versteckt, JS-Hook laeuft unsichtbar im Hintergrund\")",
       "Bash(rm -f /tmp/cookies.txt *)",
-      "PowerShell(python deploy_update.py -m \"Qualitaets-Indikator nur noch 10s statt 30s sichtbar\")"
+      "PowerShell(python deploy_update.py -m \"Qualitaets-Indikator nur noch 10s statt 30s sichtbar\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f\\\\\"{r['TeamTag']:30s} | Sp={r['Spieltage']:2d} | SP={r['Siegpunkte_pos']:2d}:{r['Siegpunkte_neg']:2d} | Pkt={r['Punkte_pos']:2d}:{r['Punkte_neg']:2d} | Bälle={r['Baelle_pos']:3d}:{r['Baelle_neg']:3d} | Rang={r['Rang']}\\\\\"\\) for r in d]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f\\\\\"#{g['Games_ID']} {g['HomeTeam']} vs {g['GuestTeam']}: {g['SiegHome']}:{g['SiegGuest']}\\\\\"\\) for g in d if g['Games_ID']==14]\")",
+      "PowerShell(foreach \\($id in @\\(2166464, 2166465, 2166466, 2166467\\)\\) { try { $r = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/$id\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'}; $j = $r.Content | ConvertFrom-Json; \"$id status=$\\($r.StatusCode\\) | streamStatus=$\\($j.stream_status\\) | available=$\\($j.is_available\\) | livestream=$\\($j.is_livestream\\) | startsAt=$\\($j.starts_at\\) | endsAt=$\\($j.ends_at\\) | hlsAvail=$\\($j.has_hls\\)\" } catch { \"$id error: $\\($_.Exception.Response.StatusCode.value__\\)\" } })",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\(0,'utf8'\\)\\);console.log\\('total:', d.length\\)\")",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(JSON.parse\\(require\\('fs'\\).readFileSync\\(0,'utf8'\\)\\), null, 2\\)\\)\")",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/2166464\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'}; \"=== 2166464 \\(works\\) ===\"; $r.Content.Substring\\(0, [Math]::Min\\(1500, $r.Content.Length\\)\\); \"\"; \"=== 2166465 \\(court 2 - NOT working\\) ===\"; $r2 = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/2166465\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'}; $r2.Content.Substring\\(0, [Math]::Min\\(1500, $r2.Content.Length\\)\\))",
+      "PowerShell(foreach \\($id in @\\(2166464, 2166465, 2166466, 2166467\\)\\) { $r = Invoke-WebRequest -Uri \"https://video.laola1.at/api/v3/contents/$id\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0';'Referer'='https://www.laola1.at/'}; $j = \\($r.Content | ConvertFrom-Json\\).data; \"$id : autoBroadcast=$\\($j.autoBroadcast\\)  autoOffline=$\\($j.autoOffline\\)\" }; \"\"; \"NOW UTC: $\\(\\(Get-Date\\).ToUniversalTime\\(\\).ToString\\('o'\\)\\)\")",
+      "PowerShell(python deploy_update.py -m \"Laola: pro Stream API checken \\(autoBroadcast/autoOffline\\), nur live-Streams in der Liste zeigen\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",
