@@ -1243,29 +1243,28 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Fragt für jede Laola-Content-ID die Public-API ab und gibt zurück welche
-  /// gerade live sind. `autoBroadcast` / `autoOffline` aus der Response geben
-  /// das geplante Sendefenster in UTC. Bei Netz-/Parse-Fehler → true (Stream
-  /// sichtbar lassen, lieber falsch-positiv als guten Content verbergen).
+  /// Prüft für jede Laola-Content-ID den HLS-Access-Endpoint per POST. Das
+  /// Schedule (autoBroadcast/autoOffline) ist nicht immer akkurat — der
+  /// /access/hls-Endpoint liefert dagegen direkt:
+  ///   200 = Stream gerade live + URL
+  ///   400 = noch nicht / nicht mehr verfügbar
+  /// Bei 400 wird der Stream rausgefiltert. Bei Netz-Fehler oder anderem
+  /// HTTP-Status → default true (lieber zeigen + User klickt, als guten
+  /// Content versehentlich verbergen).
   Future<Map<String, bool>> _fetchLaolaAvailability(List<String> ids) async {
-    final now = DateTime.now().toUtc();
     final results = await Future.wait(ids.map((id) async {
       try {
-        final res = await http.get(
-          Uri.parse('https://video.laola1.at/api/v3/contents/$id'),
+        final res = await http.post(
+          Uri.parse('https://video.laola1.at/api/v3/contents/$id/access/hls'),
           headers: {
             'User-Agent': 'Mozilla/5.0',
             'Referer': 'https://www.laola1.at/',
+            'Origin': 'https://www.laola1.at',
           },
-        ).timeout(const Duration(seconds: 3));
-        if (res.statusCode != 200) return MapEntry(id, true);
-        final data = jsonDecode(res.body)['data'] as Map<String, dynamic>?;
-        if (data == null) return MapEntry(id, true);
-        final start = DateTime.tryParse(data['autoBroadcast'] as String? ?? '');
-        final end = DateTime.tryParse(data['autoOffline'] as String? ?? '');
-        if (start == null || end == null) return MapEntry(id, true);
-        final live = !now.isBefore(start) && now.isBefore(end);
-        debugPrint('[laola-avail] $id start=$start end=$end now=$now live=$live');
+        ).timeout(const Duration(seconds: 4));
+        final live = res.statusCode != 400;
+        debugPrint('[laola-avail] $id POST /access/hls → ${res.statusCode} '
+            '(live=$live)');
         return MapEntry(id, live);
       } catch (e) {
         debugPrint('[laola-avail] $id failed: $e — defaulting to visible');
