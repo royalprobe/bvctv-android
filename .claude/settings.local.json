@@ -447,7 +447,9 @@
       "PowerShell(python deploy_update.py -m \"Laola-Player: Master selbst fetchen via HttpClient, Set-Cookie extrahieren, hoechste Variant + Cookie an ExoPlayer geben \\(Fallback auf Master+ABR wenn pick fehlschlaegt\\)\")",
       "Bash(sed -n '125,140p' /tmp/vbal/script.js)",
       "Bash(sed -n '225,255p' /tmp/vbal/script.js)",
-      "PowerShell(python deploy_update.py -m \"Laola-Extractor: laola1.at-Seite hinter schwarzem Lade-Screen+Spinner versteckt, JS-Hook laeuft unsichtbar im Hintergrund\")"
+      "PowerShell(python deploy_update.py -m \"Laola-Extractor: laola1.at-Seite hinter schwarzem Lade-Screen+Spinner versteckt, JS-Hook laeuft unsichtbar im Hintergrund\")",
+      "Bash(rm -f /tmp/cookies.txt *)",
+      "PowerShell(python deploy_update.py -m \"Qualitaets-Indikator nur noch 10s statt 30s sichtbar\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Simon\\Homepage Schachklub\\public\\galerie",

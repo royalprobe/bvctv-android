@@ -48,8 +48,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
   final FocusNode _rootFocusNode = FocusNode(debugLabel: 'LaolaPlayerRoot');
 
-  // Aktuelle Auflösung von ExoPlayer (ändert sich bei ABR-Switches). Für 30s
-  // nach Stream-Start sichtbar damit man die ABR-Konvergenz beobachten kann.
+  // Aktuelle Auflösung von ExoPlayer. Für 10s nach Stream-Start sichtbar,
+  // updated live bei ABR-Switches (falls Master-Fetch fehlschlug und auf ABR
+  // zurückgefallen wurde).
   Size? _videoSize;
   bool _showQualityIndicator = true;
   Timer? _qualityIndicatorTimer;
@@ -184,7 +185,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     _controller.play();
     _startHideControlsTimer();
-    _qualityIndicatorTimer = Timer(const Duration(seconds: 30), () {
+    _qualityIndicatorTimer = Timer(const Duration(seconds: 10), () {
       if (mounted) setState(() => _showQualityIndicator = false);
     });
 
