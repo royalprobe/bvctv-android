@@ -308,9 +308,19 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _liveVideos = liveInView);
     }
 
-    // 2. Nur das neueste Turnier auf Live-Events prüfen (API-Reihenfolge: neueste zuerst)
+    // 2. Nur das neueste Turnier auf Live-Events prüfen (API-Reihenfolge: neueste zuerst).
+    //    Externe Quellen (YouTube/Laola/virtuelle) haben keinen Live-State und werden übersprungen.
+    //    VBW-Bridges (__vbw_*) sind echte VBW-Inhalte und müssen mitgeprüft werden,
+    //    weil bei einem gerade gestarteten Turnier (z.B. Ostrava 2026) die Live-
+    //    Streams ausschließlich über die Bridge gefunden werden.
     final toCheck = _availableTournaments
-        .where((t) => !t['id']!.startsWith('__'))
+        .where((t) {
+          final id = t['id']!;
+          if (id == _allId) return false;
+          if (id.startsWith('__yt_') || id.startsWith('__laola_')) return false;
+          if (id.startsWith('__') && !id.startsWith('__vbw_')) return false;
+          return true;
+        })
         .take(1)
         .map((t) => t['id']!)
         .toSet();
@@ -324,6 +334,41 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await Future.wait(toCheck.map((id) async {
       try {
+        // VBW-Bridge: pro Media-ID gegen /jw/media/{id} prüfen.
+        if (id.startsWith('__vbw_')) {
+          final ci = id.substring('__vbw_'.length);
+          final mediaIds = _vbwBridgeMediaIds[ci] ?? const <String>[];
+          if (mediaIds.isEmpty) return;
+          int localSuccess = 0;
+          final entries = await Future.wait(mediaIds.map((mid) async {
+            try {
+              final res = await http.get(
+                Uri.parse(
+                    'https://zapp-5434-volleyball-tv.web.app/jw/media/$mid?ctx=$ctx'),
+                headers: {'Origin': 'https://tv.volleyballworld.com'},
+              ).timeout(const Duration(seconds: 6));
+              if (res.statusCode != 200) return null;
+              localSuccess++;
+              final data = jsonDecode(res.body);
+              final list = data['entry'] as List? ?? [];
+              return list.isNotEmpty ? list.first : null;
+            } catch (_) {
+              return null;
+            }
+          }));
+          if (localSuccess > 0) successCount++;
+          for (final entry in entries) {
+            if (entry == null) continue;
+            final state = entry['extensions']?['event_state'] as String? ?? '';
+            if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
+              final item = _itemFromJson(entry);
+              if (seen.add(item.id)) liveItems.add(item);
+            }
+          }
+          return;
+        }
+
+        // Reguläre VBW-Playlist: 1 Aufruf liefert alle Items mit event_state.
         final res = await http.get(
           Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id?overrideFeedType=moreinfo&ctx=$ctx'),
           headers: {'Origin': 'https://tv.volleyballworld.com'},
@@ -1289,11 +1334,19 @@ class _HomeScreenState extends State<HomeScreen> {
         headers: {'User-Agent': 'Mozilla/5.0'},
       ).timeout(const Duration(seconds: 8));
       if (homeRes.statusCode != 200) return [];
-      final ids = RegExp(r'jw%2Fmedia%2F([A-Za-z0-9]+)')
-          .allMatches(homeRes.body)
-          .map((m) => m.group(1)!)
-          .toSet()
-          .toList();
+      // VBW nutzt zwei Link-Formate auf der Homepage:
+      //   altes: jw%2Fmedia%2F<id>?... (URL-encoded self-link)
+      //   neues: /media/<id>?disablePlayNext=... (Klar-Pfad, seit ~Mai 2026)
+      // Poster-URLs (/media/<id>/poster.jpg) dürfen NICHT matchen — Anker auf
+      // "?disablePlayNext" verhindert das.
+      final ids = <String>{
+        ...RegExp(r'jw%2Fmedia%2F([A-Za-z0-9]+)')
+            .allMatches(homeRes.body)
+            .map((m) => m.group(1)!),
+        ...RegExp(r'/media/([A-Za-z0-9]+)\?disablePlayNext')
+            .allMatches(homeRes.body)
+            .map((m) => m.group(1)!),
+      }.toList();
       if (ids.isEmpty) return [];
 
       // Metadata pro ID parallel holen — extrahieren wir competition_item,
