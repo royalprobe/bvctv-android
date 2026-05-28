@@ -1079,7 +1079,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Beide Competition Groups PARALLEL fetchen (war vorher sequential)
       final cgPlaylistIds = <String>[];
-      await Future.wait(['aBT42rPR', 'rkwGm18m'].map((cgId) async {
+      await Future.wait(_beachChannelGroupIds.map((cgId) async {
         try {
           final cgRes = await http.get(
             Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/media/$cgId'),
@@ -1303,6 +1303,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // für den Bridge-Merge.
   final Map<String, String> _vbwPlaylistCi = {};
 
+  // VBW Channel Groups, die diese App zeigt. Beide sind Beach Pro Tour —
+  // alles andere (VNL Halle, Champions League, World Champs Halle) wird
+  // vom Bridge-Filter ignoriert.
+  static const Set<String> _beachChannelGroupIds = {'aBT42rPR', 'rkwGm18m'};
+
   // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
   // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
   // gelesen. So bleiben die Listen auch nach Neustart aktuell.
@@ -1421,6 +1426,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Metadata pro ID parallel holen — wir behalten das ganze Entry damit
       // _itemFromJson direkt VideoItems daraus baut. Limit 4s pro Request.
+      // Beach-Filter: nur Items deren competition_group_item in unseren
+      // bekannten Beach Channel Groups liegt (aBT42rPR/rkwGm18m). Sonst
+      // landen auch VNL/Champions-League/Halle-Spiele in der Liste, die
+      // diese App nicht zeigen soll.
       final metas = await Future.wait(ids.map((id) async {
         try {
           final res = await http.get(
@@ -1434,6 +1443,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   .firstOrNull;
           if (entry == null) return null;
           final ext = entry['extensions'] as Map<String, dynamic>? ?? {};
+          final cgi = ext['competition_group_item'] as String?;
+          if (cgi == null || !_beachChannelGroupIds.contains(cgi)) return null;
           final ci = ext['competition_item'] as String?;
           if (ci == null) return null;
           return {'ci': ci, 'entry': entry};
