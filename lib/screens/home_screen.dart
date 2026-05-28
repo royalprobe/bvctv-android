@@ -334,10 +334,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await Future.wait(toCheck.map((id) async {
       try {
-        // VBW-Bridge: pro Media-ID gegen /jw/media/{id} prüfen.
+        // VBW-Bridge: pro Media-ID gegen /jw/media/{id} prüfen — frischer
+        // event_state nötig, der gecachte VideoItem-Stand kann veraltet sein.
         if (id.startsWith('__vbw_')) {
           final ci = id.substring('__vbw_'.length);
-          final mediaIds = _vbwBridgeMediaIds[ci] ?? const <String>[];
+          final mediaIds =
+              _vbwBridgeItems[ci]?.map((v) => v.id).toList() ?? const <String>[];
           if (mediaIds.isEmpty) return;
           int localSuccess = 0;
           final entries = await Future.wait(mediaIds.map((mid) async {
@@ -382,6 +384,46 @@ class _HomeScreenState extends State<HomeScreen> {
           if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
             final item = _itemFromJson(entry);
             if (seen.add(item.id)) liveItems.add(item);
+          }
+        }
+        // Bridge-Extras für diese Playlist (PRE_LIVE/LIVE-Spiele die VBW noch
+        // nicht in die offizielle Playlist gelegt hat) ebenfalls auf LIVE
+        // prüfen — sonst wird ein gerade laufendes Match in der Pool-Phase
+        // nicht im Live-Banner sichtbar.
+        final ci = _vbwPlaylistCi[id];
+        if (ci != null) {
+          final existing = entries
+              .map((e) => e['id'] as String? ?? '')
+              .where((s) => s.isNotEmpty)
+              .toSet();
+          final extraIds = (_vbwBridgeItems[ci] ?? const <VideoItem>[])
+              .map((v) => v.id)
+              .where((mid) => !existing.contains(mid))
+              .toList();
+          if (extraIds.isNotEmpty) {
+            final extras = await Future.wait(extraIds.map((mid) async {
+              try {
+                final r = await http.get(
+                  Uri.parse(
+                      'https://zapp-5434-volleyball-tv.web.app/jw/media/$mid?ctx=$ctx'),
+                  headers: {'Origin': 'https://tv.volleyballworld.com'},
+                ).timeout(const Duration(seconds: 6));
+                if (r.statusCode != 200) return null;
+                final list = jsonDecode(r.body)['entry'] as List? ?? [];
+                return list.isNotEmpty ? list.first : null;
+              } catch (_) {
+                return null;
+              }
+            }));
+            for (final entry in extras) {
+              if (entry == null) continue;
+              final state =
+                  entry['extensions']?['event_state'] as String? ?? '';
+              if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
+                final item = _itemFromJson(entry);
+                if (seen.add(item.id)) liveItems.add(item);
+              }
+            }
           }
         }
       } catch (_) {}
@@ -1081,9 +1123,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadVideos(firstId);
       }
 
-      // Titel + match_date des neuesten Videos holen – 3072 Bytes reichen sicher
-      // (match_date liegt bei ~1900-2000 Bytes; TCP-Burst sendet ~14KB auf einmal,
-      //  daher keine Ladezeit-Erhöhung gegenüber 512 Bytes)
+      // Titel + match_date + competition_item des neuesten Items holen –
+      // 3072 Bytes reichen sicher (match_date liegt bei ~1900-2000 Bytes;
+      // TCP-Burst sendet ~14KB auf einmal, daher keine Ladezeit-Erhöhung
+      // gegenüber 512 Bytes). Die ci dient als Dedup-Key gegen Bridge-
+      // Tournaments und als Merge-Key für PRE_LIVE/LIVE-Spiele die VBW noch
+      // nicht in die offizielle Playlist gehängt hat.
       Future<Map<String, String>?> fetchTitle(String id) async {
         try {
           final client = http.Client();
@@ -1104,7 +1149,14 @@ class _HomeScreenState extends State<HomeScreen> {
           final title = jsonDecode('"${m.group(1)}"') as String;
           if (title.isEmpty) return null;
           final dm = RegExp(r'"match_date"\s*:\s*"(\d{4}-\d{2}-\d{2})').firstMatch(raw);
-          return {'id': id, 'title': title, if (dm != null) 'matchDate': dm.group(1)!};
+          final cim = RegExp(r'"competition_item"\s*:\s*"([A-Za-z0-9]+)"').firstMatch(raw);
+          if (cim != null) _vbwPlaylistCi[id] = cim.group(1)!;
+          return {
+            'id': id,
+            'title': title,
+            if (dm != null) 'matchDate': dm.group(1)!,
+            if (cim != null) 'ci': cim.group(1)!,
+          };
         } catch (_) {
           return null;
         }
@@ -1137,9 +1189,15 @@ class _HomeScreenState extends State<HomeScreen> {
       })).then((r) => r.whereType<Map<String, String>>().toList());
 
       // VBW-Bridge: Homepage nach Replays scrapen, die zu einem competition_item
-      // gehören welches noch nicht als playlist in den Channel Groups gelistet
-      // ist (z.B. ein gerade gestartetes Turnier wie Ostrava 2026).
-      final vbwBridgeF = _fetchVbwBridgeTournaments(cgPlaylistIds.toSet());
+      // gehören welches noch nicht durch eine offizielle Playlist abgedeckt
+      // ist. Wartet auf realTournamentsF damit der ci-Set verfügbar ist —
+      // verhindert Doppel-Einträge wie "BPT Elite Ostrava 2026" parallel zu
+      // "Ostrava | Elite | 2026" wenn beide die gleiche competition_item haben.
+      final vbwBridgeF = realTournamentsF.then((rts) {
+        final knownCis =
+            rts.map((m) => m['ci']).whereType<String>().toSet();
+        return _fetchVbwBridgeTournaments(cgPlaylistIds.toSet(), knownCis);
+      });
 
       // Laola1-Turniere: pro Tournament gegen /access/hls checken welche
       // Streams gerade live sind. Tournaments mit 0 verfügbaren Streams gar
@@ -1230,13 +1288,20 @@ class _HomeScreenState extends State<HomeScreen> {
   // Hintergrund. Externe Quellen (YouTube/Laola) haben ihren eigenen Cache.
   final Map<String, List<VideoItem>> _videosCache = {};
 
-  // VBW-Bridge: laufende Turniere, die VBW noch nicht in die Channel-Group-
-  // playlists eingehängt hat, deren Replays aber schon auf der Homepage
-  // verlinkt sind (z.B. Ostrava 2026). Wir scrapen die Homepage, gruppieren
-  // die gefundenen Media-IDs nach competition_item und bauen daraus virtuelle
-  // Turniere (__vbw_<competition_item>). Befüllt in _loadTournamentList,
-  // gelesen in _loadVideos.
-  final Map<String, List<String>> _vbwBridgeMediaIds = {};
+  // VBW-Bridge: laufende Turniere, die VBW noch nicht (vollständig) in die
+  // Channel-Group-playlists eingehängt hat. Wir scrapen die Homepage und
+  // gruppieren gefundene Media-IDs nach competition_item.
+  //   • Orphan ci (kein offizielles Tournament): wird als __vbw_<ci> Eintrag
+  //     in der Turnier-Dropdown sichtbar.
+  //   • Bekanntes ci (offizielle Playlist existiert): Bridge-Items werden in
+  //     die offizielle Playlist gemergt (typisch: PRE_LIVE/LIVE-Spiele die
+  //     VBW erst nach Match-Start als VOD in die Playlist legt).
+  // Befüllt in _loadTournamentList, gelesen in _loadVideos und _loadLiveAndUpcoming.
+  final Map<String, List<VideoItem>> _vbwBridgeItems = {};
+  // Mapping reguläre VBW-Playlist-ID → competition_item. Befüllt während
+  // fetchTitle (parst aus den ersten 3KB der Playlist-Antwort). Lookup-Key
+  // für den Bridge-Merge.
+  final Map<String, String> _vbwPlaylistCi = {};
 
   // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
   // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
@@ -1320,14 +1385,19 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Sucht VBW-Turniere, die noch nicht in den Channel-Group-playlists
-  /// gelistet sind (z.B. ein gerade gestartetes Event wie Ostrava 2026), deren
-  /// Replays aber schon auf der VBW-Homepage als Player-Links auftauchen. Wir
-  /// scrapen die Homepage, holen Metadata pro Media-ID, und gruppieren nach
-  /// `competition_item`. Orphans (cis, die noch keine Playlist haben) werden
-  /// als virtuelle Turniere (__vbw_<ci>) zurückgegeben.
+  /// Sucht VBW-Items, die noch nicht (vollständig) in den Channel-Group-
+  /// playlists gelistet sind. Wir scrapen die Homepage, holen Metadata pro
+  /// Media-ID, parsen in VideoItems und gruppieren nach `competition_item`.
+  ///
+  /// Cache-Befüllung (immer): `_vbwBridgeItems[ci]` — wird von `_loadVideos`
+  /// zum Mergen in offizielle Playlists und vom Bridge-Branch direkt genutzt.
+  ///
+  /// Rückgabe (nur orphans): Tournaments für ci's, die weder als playlist-id
+  /// in `knownPlaylistIds` noch als competition_item in `knownCompetitionItems`
+  /// schon abgedeckt sind. Verhindert doppelte Einträge wie z.B. "BPT Elite
+  /// Ostrava 2026" (Bridge) parallel zu "Ostrava I Elite I 2026" (offiziell).
   Future<List<Map<String, String>>> _fetchVbwBridgeTournaments(
-      Set<String> knownPlaylistIds) async {
+      Set<String> knownPlaylistIds, Set<String> knownCompetitionItems) async {
     try {
       final homeRes = await http.get(
         Uri.parse('https://tv.volleyballworld.com/'),
@@ -1349,9 +1419,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }.toList();
       if (ids.isEmpty) return [];
 
-      // Metadata pro ID parallel holen — extrahieren wir competition_item,
-      // match_date und Titel. Limit 4s pro Request damit die Liste nicht
-      // ewig blockiert wenn einzelne Calls hängen.
+      // Metadata pro ID parallel holen — wir behalten das ganze Entry damit
+      // _itemFromJson direkt VideoItems daraus baut. Limit 4s pro Request.
       final metas = await Future.wait(ids.map((id) async {
         try {
           final res = await http.get(
@@ -1367,27 +1436,41 @@ class _HomeScreenState extends State<HomeScreen> {
           final ext = entry['extensions'] as Map<String, dynamic>? ?? {};
           final ci = ext['competition_item'] as String?;
           if (ci == null) return null;
-          final mDate = (ext['match_date'] as String? ?? '').split('T').first;
-          return {'id': id, 'ci': ci, 'matchDate': mDate};
+          return {'ci': ci, 'entry': entry};
         } catch (_) {
           return null;
         }
       }));
 
-      // Gruppieren nach competition_item, Orphans rausfiltern.
-      final groups = <String, List<Map<String, String>>>{};
+      // Gruppieren nach competition_item — wir cachen ALLE ci's (auch die mit
+      // bekannter Playlist), damit _loadVideos sie in die offizielle Playlist
+      // mergen kann. Nur die Turnier-Auflistung filtert orphans.
+      final groups = <String, List<Map<String, dynamic>>>{};
       for (final m in metas) {
         if (m == null) continue;
-        final ci = m['ci']!;
-        if (knownPlaylistIds.contains(ci)) continue;
-        groups.putIfAbsent(ci, () => []).add(m);
+        final ci = m['ci'] as String;
+        groups.putIfAbsent(ci, () => []).add(m['entry'] as Map<String, dynamic>);
       }
       if (groups.isEmpty) return [];
 
-      // Pro orphan ci den Titel holen (Competition-Entity).
-      final result = await Future.wait(groups.entries.map((entry) async {
+      // Cache füllen: alle ci's bekommen ihre VideoItems in _vbwBridgeItems.
+      for (final entry in groups.entries) {
+        _vbwBridgeItems[entry.key] =
+            entry.value.map(_itemFromJson).toList(growable: false);
+      }
+
+      // Tournament-Einträge NUR für ci's bauen, die noch nicht über eine
+      // offizielle Playlist abgedeckt sind. knownPlaylistIds enthält die
+      // Playlist-IDs aus der Channel Group; knownCompetitionItems enthält die
+      // ci's der bereits geladenen Playlists (extrahiert in fetchTitle).
+      final orphanCis = groups.entries
+          .where((e) =>
+              !knownPlaylistIds.contains(e.key) &&
+              !knownCompetitionItems.contains(e.key));
+
+      final result = await Future.wait(orphanCis.map((entry) async {
         final ci = entry.key;
-        final mediaList = entry.value;
+        final items = entry.value;
         String? title;
         try {
           final res = await http.get(
@@ -1402,13 +1485,14 @@ class _HomeScreenState extends State<HomeScreen> {
         } catch (_) {}
         if (title == null || title.isEmpty) return null;
 
-        // Neuestes match_date als Sortier-Datum.
-        final matchDate = mediaList
-            .map((m) => m['matchDate'] ?? '')
-            .reduce((a, b) => a.compareTo(b) > 0 ? a : b);
-
-        _vbwBridgeMediaIds[ci] =
-            mediaList.map((m) => m['id']!).toList(growable: false);
+        // Neuestes match_date als Sortier-Datum (für Dropdown-Reihenfolge).
+        String matchDate = '';
+        for (final i in items) {
+          final d = (i['extensions']?['match_date'] as String? ?? '')
+              .split('T')
+              .first;
+          if (d.compareTo(matchDate) > 0) matchDate = d;
+        }
 
         return <String, String>{
           'id': '__vbw_$ci',
@@ -1773,32 +1857,13 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // VBW-Bridge: gefundene Media-IDs aus der Homepage parallel zu echten
-      // /jw/media-Entries auflösen — gleiche Form wie _loadVirtualTournament,
-      // damit Player/Auth/Live-Erkennung identisch zu echten VBW-Videos sind.
+      // VBW-Bridge: VideoItems wurden beim Bridge-Scrape schon geparst und
+      // gecached — kein zusätzliches Netzwerk nötig.
       if (pid.startsWith('__vbw_')) {
         final ci = pid.substring('__vbw_'.length);
-        final mediaIds = _vbwBridgeMediaIds[ci] ?? const <String>[];
-        if (mediaIds.isNotEmpty) {
-          final ctx = _buildCtx();
-          final futures = mediaIds.map((mid) async {
-            try {
-              final res = await http.get(
-                Uri.parse(
-                    'https://zapp-5434-volleyball-tv.web.app/jw/media/$mid?ctx=$ctx'),
-                headers: {'Origin': 'https://tv.volleyballworld.com'},
-              ).timeout(const Duration(seconds: 8));
-              if (res.statusCode == 200) {
-                final entries = jsonDecode(res.body)['entry'] as List? ?? [];
-                if (entries.isNotEmpty) return _itemFromJson(entries.first);
-              }
-            } catch (_) {}
-            return null;
-          });
-          final videos = (await Future.wait(futures))
-              .whereType<VideoItem>()
-              .toList()
-            ..sort((a, b) {
+        final cached = _vbwBridgeItems[ci];
+        if (cached != null && cached.isNotEmpty) {
+          final videos = [...cached]..sort((a, b) {
               if (a.matchDate == null) return 1;
               if (b.matchDate == null) return -1;
               return b.matchDate!.compareTo(a.matchDate!);
@@ -1871,12 +1936,24 @@ class _HomeScreenState extends State<HomeScreen> {
       ).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final videos = (data['entry'] as List? ?? []).map(_itemFromJson).toList()
-          ..sort((a, b) {
-            if (a.matchDate == null) return 1;
-            if (b.matchDate == null) return -1;
-            return b.matchDate!.compareTo(a.matchDate!);
-          });
+        final videos = (data['entry'] as List? ?? []).map(_itemFromJson).toList();
+        // Bridge-Merge: zusätzliche Items aus der Homepage anhängen, die noch
+        // nicht in der offiziellen Playlist sind. Typischer Fall: PRE_LIVE-
+        // Spiele (morgige Pool-Play), die VBW erst nach Match-Start als VOD
+        // in die Playlist legt. Dedup auf Media-ID-Ebene.
+        final ci = _vbwPlaylistCi[pid];
+        if (ci != null) {
+          final bridge = _vbwBridgeItems[ci];
+          if (bridge != null && bridge.isNotEmpty) {
+            final existing = videos.map((v) => v.id).toSet();
+            videos.addAll(bridge.where((v) => !existing.contains(v.id)));
+          }
+        }
+        videos.sort((a, b) {
+          if (a.matchDate == null) return 1;
+          if (b.matchDate == null) return -1;
+          return b.matchDate!.compareTo(a.matchDate!);
+        });
         _videosCache[pid] = videos;
         if (_videosLoadEpoch != epoch) return;
         setState(() => _videos = videos);
