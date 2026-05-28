@@ -1247,13 +1247,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (mounted) {
         final newFirst = results.first['id']!;
-        final needsReload = newFirst != _currentPlaylistId;
+        // Reload nötig wenn (a) anderes Default-Turnier sortiert wurde
+        // ODER (b) die aktuell geladene Playlist Bridge-Extras erhalten hat,
+        // die beim First-Load (parallel zur Bridge gestartet) noch nicht im
+        // Cache waren — sonst fehlen PRE_LIVE/LIVE-Spiele in der Liste.
+        final currentCi = _vbwPlaylistCi[_currentPlaylistId];
+        final hasNewBridgeExtras = currentCi != null &&
+            (_vbwBridgeItems[currentCi]?.isNotEmpty ?? false);
+        final needsReload =
+            newFirst != _currentPlaylistId || hasNewBridgeExtras;
         setState(() {
           _availableTournaments = results;
           _currentPlaylistId = newFirst;
         });
         if (needsReload) {
           _videosLoadEpoch++;
+          // Cache verwerfen damit Merge frisch durchläuft
+          _videosCache.remove(newFirst);
           _loadVideos(newFirst);
         }
       }
