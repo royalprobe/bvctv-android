@@ -142,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<VideoItem> get _filteredVideos {
-    var videos = _allVideos;
+    var videos = _allVideos.where((v) => v.isLive || !v.isUpcoming).toList();
     if (_genderFilter == 'men') videos = videos.where((v) => v.gender == 'Men').toList();
     if (_genderFilter == 'women') videos = videos.where((v) => v.gender == 'Women').toList();
     if (_playerFilter != null) {
