@@ -10,7 +10,9 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import '../services/auth_service.dart';
 import '../services/auth_state.dart';
+import '../services/silent_login_flow.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -43,6 +45,97 @@ class _LoginScreenState extends State<LoginScreen> {
     return base64UrlEncode(bytes).replaceAll('=', '');
   }
 
+  /// Vollflaechiger Dialog fuer den allerersten Login: User gibt E-Mail +
+  /// Passwort ein, danach wird der Silent-Flow versucht. So sieht der User
+  /// die offizielle VBW-Signin-Seite nie, solange seine Daten korrekt sind.
+  Future<(String, String)?> _promptForFirstTimeCredentials() {
+    final emailCtrl = TextEditingController();
+    final pwCtrl = TextEditingController();
+    return showDialog<(String, String)>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(S.savedCredentials,
+            style: const TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.savedCredentialsHint,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: emailCtrl,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.emailAddress,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pwCtrl,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.password,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(S.autoFillNotice,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(S.cancel,
+                style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () {
+              final email = emailCtrl.text.trim();
+              final pw = pwCtrl.text;
+              if (email.isEmpty || pw.isEmpty) return;
+              Navigator.pop(ctx, (email, pw));
+            },
+            child: Text(S.save,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _generateCodeChallenge(String verifier) {
     final digest = sha256.convert(utf8.encode(verifier));
     return base64UrlEncode(digest.bytes).replaceAll('=', '');
@@ -53,6 +146,52 @@ class _LoginScreenState extends State<LoginScreen> {
       _isLoading = true;
       _errorMessage = null;
     });
+
+    // Erst-Login: keine gespeicherten Credentials → eigenen Dialog statt
+    // direkt das offizielle VBW-Login-Fenster zeigen. Nach Eingabe versuchen
+    // wir den Silent-Re-Login mit den frischen Daten, sodass der User die
+    // signin-Seite gar nicht zu Gesicht bekommt. Schlaegt das fehl (z.B.
+    // falsches Passwort oder Server-Aerger), fallen wir auf die sichtbare
+    // WebView zurueck — der Autofill nutzt dann die gerade eingegebenen Daten.
+    const storage = FlutterSecureStorage();
+    final savedEmail = await storage.read(key: 'saved_email');
+    final savedPw = await storage.read(key: 'saved_password');
+    final hasSavedCreds =
+        (savedEmail ?? '').isNotEmpty && (savedPw ?? '').isNotEmpty;
+
+    if (!hasSavedCreds) {
+      if (!mounted) return;
+      final entered = await _promptForFirstTimeCredentials();
+      if (entered == null) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = S.loginCancelled;
+          });
+        }
+        return;
+      }
+      await storage.write(key: 'saved_email', value: entered.$1);
+      await storage.write(key: 'saved_password', value: entered.$2);
+
+      final token = await SilentLoginFlow.tryRelogin();
+      if (!mounted) return;
+      if (token != null && token.isNotEmpty) {
+        await AuthService.refreshTvCookies(token);
+        AuthState.token.value = token;
+        if (!mounted) return;
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context, true);
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        }
+        return;
+      }
+      // Silent fehlgeschlagen — Fall durch zur sichtbaren WebView.
+    }
 
     final codeVerifier = _generateCodeVerifier();
     final authUrl = Uri.parse(_authEndpoint).replace(queryParameters: {
@@ -125,7 +264,6 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     // Auch ohne Token weitermachen: Cookies auf tv.volleyballworld.com sind gesetzt,
     // Player funktioniert via Session. Home-API nutzt ctx mit Token (kann fehlschlagen).
-    const storage = FlutterSecureStorage();
     final finalToken = token ?? '';
     await storage.write(key: 'access_token', value: finalToken);
     if (refreshToken != null && refreshToken.isNotEmpty) {
