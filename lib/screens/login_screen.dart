@@ -200,6 +200,10 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   String? _pendingCode;
   String? _savedEmail;
   String? _savedPassword;
+  // Zuletzt vom User in ein Passwort-Feld auf signin.* eingegebene Wert.
+  // Wird in saved_password committet, sobald der OAuth-Flow erfolgreich
+  // mit code=... auf tv.* zurückkehrt.
+  String? _pendingPassword;
 
   double _cursorX = 300;
   double _cursorY = 200;
@@ -227,68 +231,63 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 })();
 ''';
 
-  // Captures a newly-set password on the "Set your password" page so the
-  // saved credentials stay in sync after VBW forces a reset (e.g. wegen
-  // 3-Geräte-Limit). Only fires when the page actually looks like a
-  // password-reset prompt, to avoid grabbing the regular login password.
+  // Hookt JEDES Passwort-Submit auf der signin-Domain und meldet den eingetippten
+  // Wert an Flutter (pending). Der wird erst dann in saved_password committet,
+  // wenn der OAuth-Flow erfolgreich mit code=... zurückkommt — so überlebt nur
+  // ein echtes funktionierendes Passwort, falsche Tippversuche bleiben folgenlos.
+  // Macht insbesondere den Reset-Flow nach dem 3-Geräte-Limit selbst-heilend.
   static const _passwordCaptureScript = r'''
 (function() {
-  if (window.__bvctv_pw_hook_installed) return;
-  function bodyTextMatches(needles) {
-    var t = (document.body && document.body.textContent || '').toLowerCase();
-    for (var i = 0; i < needles.length; i++) {
-      if (t.indexOf(needles[i]) >= 0) return true;
-    }
-    return false;
-  }
-  function tryInstall() {
-    var pwInputs = document.querySelectorAll('input[type="password"]');
-    if (pwInputs.length === 0) return false;
-    if (!bodyTextMatches([
-      'set your password',
-      'set password',
-      'neues passwort',
-      'passwort festlegen',
-    ])) return false;
+  if (window.__bvctv_pw_capture_installed) return;
+  window.__bvctv_pw_capture_installed = true;
 
-    function readAndSend() {
-      try {
-        var pw = pwInputs[0].value || '';
-        if (pw.length > 0) {
-          window.flutter_inappwebview.callHandler('BvctvNewPassword', pw);
+  function captureNow() {
+    try {
+      var pwInputs = document.querySelectorAll('input[type="password"]');
+      for (var i = 0; i < pwInputs.length; i++) {
+        var v = pwInputs[i].value || '';
+        if (v.length > 0) {
+          window.flutter_inappwebview.callHandler('BvctvPendingPassword', v);
+          return;
         }
-      } catch (e) {}
-    }
-
-    document.querySelectorAll('button, input[type="submit"]').forEach(function(btn) {
-      if (btn.__bvctvHooked) return;
-      btn.__bvctvHooked = true;
-      btn.addEventListener('click', readAndSend, true);
-    });
-    document.querySelectorAll('form').forEach(function(f) {
-      if (f.__bvctvHooked) return;
-      f.__bvctvHooked = true;
-      f.addEventListener('submit', readAndSend, true);
-    });
-    return true;
+      }
+    } catch (e) {}
   }
 
-  if (tryInstall()) {
-    window.__bvctv_pw_hook_installed = true;
-    return;
+  function hookButton(btn) {
+    if (btn.__bvctvPwHooked) return;
+    btn.__bvctvPwHooked = true;
+    btn.addEventListener('click', captureNow, true);
   }
-  // SPA-Rendering: spät nachfragen, ob die Seite jetzt das Reset-Formular zeigt.
-  var attempts = 0;
-  var iv = setInterval(function() {
-    if (window.__bvctv_pw_hook_installed || attempts++ > 30) {
-      clearInterval(iv);
-      return;
+  function hookForm(f) {
+    if (f.__bvctvPwHooked) return;
+    f.__bvctvPwHooked = true;
+    f.addEventListener('submit', captureNow, true);
+  }
+  function rescan() {
+    document.querySelectorAll('button, input[type="submit"]').forEach(hookButton);
+    document.querySelectorAll('form').forEach(hookForm);
+  }
+
+  rescan();
+  try {
+    var mo = new MutationObserver(rescan);
+    mo.observe(document.body || document.documentElement,
+      { childList: true, subtree: true });
+  } catch (e) {
+    // Fallback wenn MutationObserver nicht verfügbar
+    var n = 0;
+    var iv = setInterval(function() {
+      if (n++ > 60) { clearInterval(iv); return; }
+      rescan();
+    }, 500);
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && e.target && e.target.type === 'password') {
+      captureNow();
     }
-    if (tryInstall()) {
-      window.__bvctv_pw_hook_installed = true;
-      clearInterval(iv);
-    }
-  }, 500);
+  }, true);
 })();
 ''';
 
@@ -522,6 +521,124 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
     }
   }
 
+  /// Manuelles Bearbeiten der gespeicherten Zugangsdaten direkt aus dem
+  /// Login-Screen. Wird per Header-Button erreicht — Fallback, falls die
+  /// automatische Passwort-Erfassung mal versagt (z.B. neues Layout der
+  /// signin-Seite). Nach dem Speichern wird die WebView neu geladen, damit
+  /// der Autofill die frischen Daten verwendet.
+  Future<void> _editSavedCredentials() async {
+    const storage = FlutterSecureStorage();
+    final emailCtrl = TextEditingController(text: _savedEmail ?? '');
+    final pwCtrl = TextEditingController(text: _savedPassword ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(S.savedCredentials,
+            style: const TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.savedCredentialsHint,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: emailCtrl,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.emailAddress,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pwCtrl,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: S.password,
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A2A),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Colors.orange, width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(S.autoFillNotice,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(S.cancel,
+                style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(S.save,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (saved != true) return;
+
+    final email = emailCtrl.text.trim();
+    final pw = pwCtrl.text;
+    if (email.isNotEmpty) {
+      await storage.write(key: 'saved_email', value: email);
+    } else {
+      await storage.delete(key: 'saved_email');
+    }
+    if (pw.isNotEmpty) {
+      await storage.write(key: 'saved_password', value: pw);
+    } else {
+      await storage.delete(key: 'saved_password');
+    }
+    if (!mounted) return;
+    setState(() {
+      _savedEmail = email.isEmpty ? null : email;
+      _savedPassword = pw.isEmpty ? null : pw;
+      // Frische Capture-Session: alten Pending-Stand verwerfen, sonst
+      // würde nach dem Reload eventuell der alte Wert wieder committet.
+      _pendingPassword = null;
+    });
+    // Reload damit der Autofill (onLoadStop → _autofillScript) die neuen
+    // Daten verwendet.
+    try {
+      await _webController?.loadUrl(
+        urlRequest: URLRequest(url: WebUri(widget.url)),
+      );
+    } catch (_) {}
+  }
+
   /// Escape für Einbettung in einen einfach-quotierten JS-String.
   static String _jsEscape(String s) => s
       .replaceAll('\\', '\\\\')
@@ -647,6 +764,19 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                     S.loginTitle,
                     style: const TextStyle(color: Colors.white70, fontSize: 16),
                   ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _editSavedCredentials,
+                    icon: const Icon(Icons.key, color: Colors.white70, size: 16),
+                    label: Text(
+                      S.savedCredentials,
+                      style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      backgroundColor: const Color(0xFF2A2A2A),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -671,15 +801,16 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                         onWebViewCreated: (c) {
                           _webController = c;
                           c.addJavaScriptHandler(
-                            handlerName: 'BvctvNewPassword',
-                            callback: (args) async {
+                            handlerName: 'BvctvPendingPassword',
+                            callback: (args) {
                               if (args.isEmpty) return;
                               final pw = args[0]?.toString() ?? '';
                               if (pw.isEmpty) return;
-                              debugPrint(
-                                  '[bvctv-login] captured new password (len=${pw.length}) — updating saved_password');
-                              await const FlutterSecureStorage().write(
-                                  key: 'saved_password', value: pw);
+                              if (_pendingPassword != pw) {
+                                debugPrint(
+                                    '[bvctv-login] pending password captured (len=${pw.length})');
+                              }
+                              _pendingPassword = pw;
                             },
                           );
                         },
@@ -712,6 +843,20 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
                             debugPrint('[bvctv-login] auth landed on tv homepage, popping (codeLen=${_pendingCode!.length})');
                             final code = _pendingCode!;
                             _pendingCode = null;
+                            // Erfolgreicher Auth-Flow: das zuletzt eingetippte
+                            // Passwort war gültig → in saved_password schreiben,
+                            // falls es vom bisher gespeicherten abweicht. So
+                            // wird ein nach 3-Geräte-Limit zurückgesetztes
+                            // Passwort automatisch übernommen.
+                            final pending = _pendingPassword;
+                            if (pending != null &&
+                                pending.isNotEmpty &&
+                                pending != _savedPassword) {
+                              debugPrint(
+                                  '[bvctv-login] committing captured password (len=${pending.length}) to saved_password');
+                              await const FlutterSecureStorage()
+                                  .write(key: 'saved_password', value: pending);
+                            }
                             if (mounted) Navigator.of(context).pop(code);
                           }
                         },
