@@ -266,7 +266,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void _startPreload(VideoItem video) {
     if (_preloadedVideoId == video.id) return;
     _preloadFocusTimer?.cancel();
-    _preloadFocusTimer = Timer(const Duration(milliseconds: 700), () {
+    // Debounce-Fenster fuer Scroll-Bewegungen ueber Cards. 300ms reicht,
+    // dass schnelles Durchblaettern keine Preloads ausloest, ohne dass
+    // sich der Player-Start auf der einzelnen Card spuerbar verzoegert.
+    _preloadFocusTimer = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       final ctx = _buildCtx();
       final selfLink = Uri.encodeComponent(
@@ -2174,6 +2177,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showLiveDialog(VideoItem video) {
+    // Player-WebView schon waehrend der Dialog auf eine Entscheidung wartet
+    // warmlaufen lassen — Card-Focus-Preload ist fuer Live-Karten deaktiviert,
+    // hier per Direktaufruf an _startPreload nachholen. Beim Klick auf "Vom
+    // Anfang an" / "Live einsteigen" startet der Player dann mit warmem
+    // Cookie-Jar und gecachten Player-Assets.
+    if (Platform.isAndroid) {
+      _startPreload(video);
+    }
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(

@@ -220,7 +220,7 @@ class SilentLoginFlow {
   var lastFilled = '';
   var timer = setInterval(function(){
     attempts++;
-    if (attempts > 30) { clearInterval(timer); window.__bvctv_autofill_running = false; return; }
+    if (attempts > 60) { clearInterval(timer); window.__bvctv_autofill_running = false; return; }
     var emailInp = findEmail();
     var passInp = findPass();
     if (passInp && pw) {
@@ -243,7 +243,7 @@ class SilentLoginFlow {
       }
       return;
     }
-  }, 250);
+  }, 100);
 })();
 ''';
   }

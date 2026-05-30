@@ -701,7 +701,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   var lastFilled = '';
   var timer = setInterval(function(){
     attempts++;
-    if (attempts > 30) { clearInterval(timer); window.__bvctv_autofill_running = false; return; }
+    if (attempts > 60) { clearInterval(timer); window.__bvctv_autofill_running = false; return; }
     var emailInp = findEmail();
     var passInp = findPass();
     var key = (emailInp ? 'e' : '') + (passInp ? 'p' : '');
@@ -733,7 +733,7 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
       }
       return;
     }
-  }, 250);
+  }, 100);
 })();
 ''';
   }

@@ -140,8 +140,10 @@ class AuthService {
       ),
       onLoadStop: (controller, url) async {
         debugPrint('[bvctv-auth] tv cookie warmup loaded: $url');
-        // Cookies sind jetzt vom Server gesetzt
-        await Future.delayed(const Duration(milliseconds: 500));
+        // Cookies werden mit dem Set-Cookie-Header gesetzt — der ist mit
+        // onLoadStop bereits durch. 100ms Sicherheitspuffer fuer den nativen
+        // Cookie-Jar-Flush ist ueppig, frueher 500ms war reine Vorsicht.
+        await Future.delayed(const Duration(milliseconds: 100));
         finish();
       },
       onReceivedError: (controller, request, error) {
