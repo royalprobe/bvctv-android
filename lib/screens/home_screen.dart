@@ -3599,7 +3599,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           var p = jwplayer();
           if (p && p.getState) {
             try { var v = $_jsGetVideo; if (v) _flutterSetupVideo(v); } catch(e) {}
-            p.on('ready', function() {
+            var _readyHandled = false;
+            function _onPlayerReady() {
+              if (_readyHandled) return;
+              _readyHandled = true;
               FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
               setTimeout(function() {
                 _forceMaxQuality(p);
@@ -3689,12 +3692,18 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                 }, true);
                 ''' : ''}
               }, 0);
-            });
-            // Race condition fix: player might already be past 'idle' when we register
+            }
+            p.on('ready', _onPlayerReady);
+            // Race condition fix: wenn der Player schon ueber 'idle' hinaus
+            // ist (z.B. wegen warmem Preload), hat 'ready' bereits gefeuert
+            // — der Listener oben verpasst es. Daher Handler hier nochmal
+            // direkt anstossen. Vorher wurde nur eine Flutter-Nachricht
+            // gepostet, der Seek-Code im setTimeout(0) ist nie gelaufen —
+            // genau warum "Vom Anfang an" auf Live-Streams nicht griff.
             try {
               var st = p.getState();
               if (st && st !== 'idle' && st !== 'error') {
-                FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
+                _onPlayerReady();
               }
             } catch(e) {}
             p.on('levels', function() { _forceMaxQuality(p); });
