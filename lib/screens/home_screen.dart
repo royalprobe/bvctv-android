@@ -3617,43 +3617,53 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                   }
                 } catch(e) {}
                 ''' : widget.isLive ? '''
-                // "Vom Anfang an" auf Live-Stream: HLS-DVR-Window erlaubt
-                // Rueckspulen auf seekable.start(0). JWPlayer schnappt aber
-                // gerne zurueck auf den Live-Edge, deshalb:
-                //   1. seek BEIDE APIs (p.seek + v.currentTime) — eine der
-                //      beiden wird vom Player respektiert
-                //   2. Watchdog 15s lang: wenn currentTime in die obere
-                //      Haelfte des Seekable-Windows driftet, neu seeken
-                //   3. setInterval-Init falls firstFrame nie kommt
+                // "Vom Anfang an" auf Live-Stream — robuste Variante:
+                //   1. Drei Seek-APIs probieren: p.seek(0) ist die korrekte
+                //      JWPlayer-Notation fuer DVR-Start (dur ist die DVR-Window-
+                //      Laenge, nicht die Wall-Clock-Zeit), p.seek(s) als
+                //      Fallback falls der Player den Absolutwert respektiert,
+                //      und v.currentTime = s direkt auf dem HTML5-Element.
+                //   2. Watchdog laeuft 30s und gibt NICHT mehr nach 3 stabilen
+                //      Ticks auf — JWPlayer hat in Tests teils erst 5-10s
+                //      nach erfolgreicher Erstplatzierung zurueckgeschnappt.
+                //   3. Watchdog stoppt bei User-Interaktion (Pfeiltasten),
+                //      damit manuelle Skip-Aktionen nicht zurueckgezogen werden.
                 var _seekAttempts = 0;
-                var _stableTicks = 0;
+                var _userInteracted = false;
                 function _dbg(m) { try { FlutterChannel.postMessage(JSON.stringify({type:'debug',msg:m})); } catch(e) {} }
-                function _doSeekToStart(reason) {
+                function _seekToStart(reason) {
                   try {
                     var v = $_jsGetVideo;
                     if (!v) { _dbg('NO VIDEO ('+reason+')'); return false; }
                     var sk = v.seekable;
-                    if (!sk || sk.length === 0) { _dbg('seekable empty cur='+v.currentTime.toFixed(1)); return false; }
+                    if (!sk || sk.length === 0) { _dbg('seekable empty '+reason); return false; }
                     var s = sk.start(0);
                     var e = sk.end(0);
-                    if (e - s < 10) { _dbg('range too small '+(e-s).toFixed(1)); return false; }
-                    _dbg('SEEK('+reason+') s='+s.toFixed(1)+' e='+e.toFixed(1)+' cur='+v.currentTime.toFixed(1));
-                    // JWPlayer-API (respektiert vom Player UI/State)
-                    try { p.seek(s); } catch(err1) { _dbg('p.seek err: '+err1); }
-                    // HTML5-Element direkt (Fallback wenn p.seek ignoriert wird)
-                    try { v.currentTime = s; } catch(err2) { _dbg('v.currentTime err: '+err2); }
+                    if (e - s < 10) { _dbg('range too small '+(e-s).toFixed(1)+' '+reason); return false; }
+                    var dur = 0;
+                    try { dur = p.getDuration() || 0; } catch(_){}
+                    _dbg('SEEK '+reason+' s='+s.toFixed(0)+' e='+e.toFixed(0)+' cur='+v.currentTime.toFixed(0)+' dur='+dur.toFixed(0));
+                    // (1) JWPlayer DVR-Konvention: 0 = Anfang des DVR-Windows
+                    try { p.seek(0); } catch(err1) { _dbg('p.seek(0) err: '+err1); }
+                    // (2) Absolutwert in der Media-Timeline
+                    try { p.seek(s); } catch(err2) { _dbg('p.seek(s) err: '+err2); }
+                    // (3) Fallback direkt auf HTML5-Element
+                    try { v.currentTime = s; } catch(err3) { _dbg('v.currentTime err: '+err3); }
                     return true;
                   } catch(e) { _dbg('SEEK ERR: '+e); return false; }
                 }
-                // Erster Seek-Versuch nach firstFrame
+                // Erster Seek-Versuch sobald das erste Frame da ist
                 p.on('firstFrame', function() {
-                  _dbg('firstFrame fired');
-                  setTimeout(function(){ _doSeekToStart('firstFrame'); }, 300);
+                  _dbg('firstFrame');
+                  _seekToStart('firstFrame');
+                  setTimeout(function(){ _seekToStart('firstFrame+1s'); }, 1000);
                 });
-                // Watchdog: prueft 15s lang ob wir wirklich am Anfang bleiben
+                // Watchdog: 30s lang alle 500ms — auch wenn ein Seek schon
+                // erfolgreich war wird weiter geprueft und ggf. nachgezogen.
                 var _watchdog = setInterval(function() {
                   _seekAttempts++;
-                  if (_seekAttempts > 30) { clearInterval(_watchdog); _dbg('watchdog done'); return; }
+                  if (_userInteracted) { clearInterval(_watchdog); _dbg('watchdog off (user)'); return; }
+                  if (_seekAttempts > 60) { clearInterval(_watchdog); _dbg('watchdog done'); return; }
                   try {
                     var v = $_jsGetVideo;
                     if (!v || !v.seekable || v.seekable.length === 0) return;
@@ -3662,21 +3672,21 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                     if (e - s < 10) return;
                     var cur = v.currentTime;
                     var posInWindow = (cur - s) / (e - s);
-                    // Driften wir Richtung Live-Edge (>50% des Fensters
-                    // oder weniger als 30s vom Edge)? → neu seeken.
+                    // Drift Richtung Live-Edge: >50% des Fensters oder
+                    // weniger als 30s vom Edge → neu seeken.
                     if (posInWindow > 0.5 || (e - cur) < 30) {
-                      _doSeekToStart('watchdog drift='+posInWindow.toFixed(2));
-                      _stableTicks = 0;
-                    } else {
-                      _stableTicks++;
-                      // 3 stabile Checks (~1.5s) im Start-Bereich → fertig
-                      if (_stableTicks >= 3) {
-                        _dbg('stable at start, watchdog stop');
-                        clearInterval(_watchdog);
-                      }
+                      _seekToStart('drift '+(posInWindow*100).toFixed(0)+'%');
                     }
                   } catch(e) { _dbg('watchdog err: '+e); }
                 }, 500);
+                // User-Interaktion (Pfeiltasten) deaktiviert den Watchdog,
+                // damit manuelle Skip-Aktionen Richtung Live nicht direkt
+                // wieder zum Anfang gezerrt werden.
+                document.addEventListener('keydown', function(e) {
+                  if (e.keyCode >= 37 && e.keyCode <= 40) {
+                    _userInteracted = true;
+                  }
+                }, true);
                 ''' : ''}
               }, 0);
             });
