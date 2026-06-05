@@ -1634,6 +1634,32 @@ class _HomeScreenState extends State<HomeScreen> {
   // Jeder Court ist ein eigenes "Video" innerhalb des Turniers.
   static const List<Map<String, Object>> _laolaTournamentData = [
     {
+      'id': '__laola_innsbruck_2026__',
+      'title': 'Pro Masters Innsbruck 2026',
+      'matchDate': '2026-06-05',
+      'tournament': 'win2day PRO MASTERS Innsbruck',
+      'videos': [
+        {
+          'id': '2173006',
+          'title': 'Center Court',
+          'url': 'https://www.laola1.at/de/video/player/2173006',
+          'thumbnail': '',
+        },
+        {
+          'id': '2173007',
+          'title': 'Court 2',
+          'url': 'https://www.laola1.at/de/video/player/2173007',
+          'thumbnail': '',
+        },
+        {
+          'id': '2173008',
+          'title': 'Court 3',
+          'url': 'https://www.laola1.at/de/video/player/2173008',
+          'thumbnail': '',
+        },
+      ],
+    },
+    {
       'id': '__laola_poertschach_2026__',
       'title': 'Pro Masters Pörtschach 2026',
       'matchDate': '2026-05-24',
