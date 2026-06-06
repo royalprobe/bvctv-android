@@ -1636,25 +1636,19 @@ class _HomeScreenState extends State<HomeScreen> {
     {
       'id': '__laola_innsbruck_2026__',
       'title': 'Pro Masters Innsbruck 2026',
-      'matchDate': '2026-06-05',
+      'matchDate': '2026-06-06',
       'tournament': 'win2day PRO MASTERS Innsbruck',
       'videos': [
         {
-          'id': '2173006',
+          'id': '2173012',
           'title': 'Center Court',
-          'url': 'https://www.laola1.at/de/video/player/2173006',
+          'url': 'https://www.laola1.at/de/video/player/2173012',
           'thumbnail': '',
         },
         {
-          'id': '2173007',
+          'id': '2173014',
           'title': 'Court 2',
-          'url': 'https://www.laola1.at/de/video/player/2173007',
-          'thumbnail': '',
-        },
-        {
-          'id': '2173008',
-          'title': 'Court 3',
-          'url': 'https://www.laola1.at/de/video/player/2173008',
+          'url': 'https://www.laola1.at/de/video/player/2173014',
           'thumbnail': '',
         },
       ],
