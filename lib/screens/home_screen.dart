@@ -22,6 +22,7 @@ import '../services/auth_service.dart';
 import '../services/auth_state.dart';
 import '../services/silent_login_flow.dart';
 import '../services/laola_stream_extractor.dart';
+import '../services/laola_livestream_scraper.dart';
 
 class VideoItem {
   final String id;
@@ -81,6 +82,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _liveRefreshTimer;
   Timer? _videoRefreshTimer;
   Timer? _preloadFocusTimer;
+  Timer? _laolaScrapeTimer;
+  // Dynamisch aus https://www.laola1.at/de/tvthek/livestreams/ gescrapte
+  // Beach-Turniere. Format identisch zu _laolaTournamentData, sodass der
+  // bestehende Lookup-Pfad in _loadVideos gegen beide Listen sucht.
+  List<Map<String, Object>> _scrapedLaolaTournaments = const [];
   WebViewController? _preloadController;
   String? _preloadedVideoId;
   bool _isLoading = true;
@@ -194,11 +200,81 @@ class _HomeScreenState extends State<HomeScreen> {
       PackageInfo.fromPlatform().then((i) { if (mounted) setState(() => _appVersion = i.version); });
       Future.delayed(const Duration(seconds: 10), _checkForUpdateOnce);
     }
+    // Laola1-Livestream-Scraper laeuft erst NACH dem App-Start, damit VBW-
+    // Playlists und Update-Check nicht durch einen externen Fetch verzoegert
+    // werden. Refresh alle 30 min (Tournament-Tage haben dynamische Court-IDs).
+    Future.delayed(const Duration(seconds: 8), _scrapeLaolaLivestreams);
+    _laolaScrapeTimer = Timer.periodic(
+        const Duration(minutes: 30), (_) => _scrapeLaolaLivestreams());
   }
 
   Future<void> _checkForUpdateOnce() async {
     final info = await UpdateChecker.checkOncePerSession();
     if (info != null && mounted) _showUpdateDialog(info);
+  }
+
+  /// Holt die Laola1-Live-Uebersicht, parst alle Pro-Masters-Eintraege, prueft
+  /// pro Court /access/hls, und merged Treffer in die Tournament-Liste. Falls
+  /// das aktuell aktive Tournament durch die Scrape-Daten ueberschrieben oder
+  /// neu eingefuegt wird, wird kein automatischer Reload ausgeloest — der
+  /// User soll seinen aktuellen Video-Stream nicht durch einen Hintergrund-
+  /// Refresh verlieren.
+  Future<void> _scrapeLaolaLivestreams() async {
+    final scraped = await LaolaLivestreamScraper.findBeachTournaments();
+    if (!mounted || scraped.isEmpty) return;
+
+    // Pro Tournament die Court-IDs gegen /access/hls validieren und nicht
+    // verfuegbare Courts entfernen. Tournament mit 0 Live-Courts faellt raus.
+    final validated = <Map<String, Object>>[];
+    for (final t in scraped) {
+      final videos = (t['videos'] as List).cast<Map<String, String>>();
+      final ids = videos.map((v) => v['id']!).toList();
+      final avail = await _fetchLaolaAvailability(ids);
+      _laolaAvailCache[t['id'] as String] = avail;
+      final liveVideos =
+          videos.where((v) => avail[v['id']!] ?? false).toList();
+      if (liveVideos.isEmpty) continue;
+      validated.add({
+        ...t,
+        'videos': liveVideos,
+      });
+    }
+
+    if (!mounted) return;
+
+    // Dedup: wenn die hardcoded _laolaTournamentData die gleiche Player-ID
+    // hat (gleiche Court-IDs am gleichen Tag), Scrape-Eintrag verwerfen —
+    // hardcoded Tabelle hat ggf. korrekte Court-Namen + Thumbnails.
+    final hardcodedIds = _laolaTournamentData
+        .expand((t) => (t['videos'] as List).cast<Map<String, String>>())
+        .map((v) => v['id']!)
+        .toSet();
+    final deduped = validated.where((t) {
+      final vids = (t['videos'] as List).cast<Map<String, String>>();
+      return !vids.every((v) => hardcodedIds.contains(v['id']!));
+    }).toList();
+
+    _scrapedLaolaTournaments = deduped;
+    if (deduped.isEmpty) return;
+
+    // Tournament-Liste fuer den User aktualisieren — bestehende Eintraege
+    // bleiben, gescrapte werden vorne eingefuegt (= aktuellste Spieltage
+    // oben). Aktuell ausgewaehltes Tournament wird NICHT umgeschaltet.
+    final newEntries = deduped
+        .map((t) => {
+              'id': t['id'] as String,
+              'title': t['title'] as String,
+              'matchDate': t['matchDate'] as String,
+            })
+        .toList();
+    final existingIds = _availableTournaments.map((t) => t['id']).toSet();
+    final additions =
+        newEntries.where((e) => !existingIds.contains(e['id'])).toList();
+    if (additions.isNotEmpty) {
+      setState(() {
+        _availableTournaments = [...additions, ..._availableTournaments];
+      });
+    }
   }
 
   void _showUpdateDialog(UpdateInfo info) {
@@ -289,6 +365,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _liveRefreshTimer?.cancel();
     _videoRefreshTimer?.cancel();
     _preloadFocusTimer?.cancel();
+    _laolaScrapeTimer?.cancel();
     try { _preloadController?.loadRequest(Uri.parse('about:blank')); } catch (_) {}
     super.dispose();
   }
@@ -1824,7 +1901,9 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
 
-        final ltData = _laolaTournamentData
+        // Lookup gegen hardcoded Tabelle UND gegen die zur Laufzeit
+        // gescrapten Eintraege aus LaolaLivestreamScraper.
+        final ltData = [..._laolaTournamentData, ..._scrapedLaolaTournaments]
             .firstWhere((t) => t['id'] == pid, orElse: () => const {});
         if (ltData.isNotEmpty) {
           final tournamentName = ltData['tournament'] as String? ?? '';
