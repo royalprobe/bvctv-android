@@ -202,10 +202,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     // Laola1-Livestream-Scraper laeuft erst NACH dem App-Start, damit VBW-
     // Playlists und Update-Check nicht durch einen externen Fetch verzoegert
-    // werden. Refresh alle 30 min (Tournament-Tage haben dynamische Court-IDs).
+    // werden. Refresh nur alle 2 Stunden — Court-IDs bleiben innerhalb eines
+    // Tournament-Tags stabil, das Polling deckt nur Faelle ab in denen ein
+    // Stream im Lauf des Tages erst online geht.
     Future.delayed(const Duration(seconds: 8), _scrapeLaolaLivestreams);
     _laolaScrapeTimer = Timer.periodic(
-        const Duration(minutes: 30), (_) => _scrapeLaolaLivestreams());
+        const Duration(hours: 2), (_) => _scrapeLaolaLivestreams());
   }
 
   Future<void> _checkForUpdateOnce() async {
