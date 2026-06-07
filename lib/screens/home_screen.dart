@@ -82,7 +82,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _liveRefreshTimer;
   Timer? _videoRefreshTimer;
   Timer? _preloadFocusTimer;
-  Timer? _laolaScrapeTimer;
   // Dynamisch aus https://www.laola1.at/de/tvthek/livestreams/ gescrapte
   // Beach-Turniere. Format identisch zu _laolaTournamentData, sodass der
   // bestehende Lookup-Pfad in _loadVideos gegen beide Listen sucht.
@@ -202,12 +201,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     // Laola1-Livestream-Scraper laeuft erst NACH dem App-Start, damit VBW-
     // Playlists und Update-Check nicht durch einen externen Fetch verzoegert
-    // werden. Refresh nur alle 2 Stunden — Court-IDs bleiben innerhalb eines
-    // Tournament-Tags stabil, das Polling deckt nur Faelle ab in denen ein
-    // Stream im Lauf des Tages erst online geht.
+    // werden. KEIN periodischer Refresh — Court-IDs bleiben den Tag ueber
+    // stabil. Bei Bedarf trifft der User den Aktualisieren-Button in der
+    // AppBar, der re-triggert auch den Scrape.
     Future.delayed(const Duration(seconds: 8), _scrapeLaolaLivestreams);
-    _laolaScrapeTimer = Timer.periodic(
-        const Duration(hours: 2), (_) => _scrapeLaolaLivestreams());
   }
 
   Future<void> _checkForUpdateOnce() async {
@@ -367,7 +364,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _liveRefreshTimer?.cancel();
     _videoRefreshTimer?.cancel();
     _preloadFocusTimer?.cancel();
-    _laolaScrapeTimer?.cancel();
     try { _preloadController?.loadRequest(Uri.parse('about:blank')); } catch (_) {}
     super.dispose();
   }
@@ -2596,7 +2592,13 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('BVCTV', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, letterSpacing: 4)),
         backgroundColor: const Color(0xFF0A0A0A),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadVideos),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () {
+              _loadVideos();
+              _scrapeLaolaLivestreams();
+            },
+          ),
           IconButton(icon: const Icon(Icons.settings), onPressed: _showSettings),
         ],
       ),
