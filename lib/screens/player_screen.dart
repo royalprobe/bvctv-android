@@ -295,8 +295,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _onTap() {
-    setState(() => _showControls = !_showControls);
-    if (_showControls) _startHideControlsTimer();
+    // KEIN Toggle — das war der OSD-Blink waehrend rapide Seek-Taps. Die
+    // Seek-Zonen (innere GestureDetectors) fuehrten _seek aus und _seek
+    // setzte _showControls=true, danach toggelte _onTap dieses wieder weg.
+    // Jetzt: Tap blendet die Controls IMMER ein, das Wegblenden uebernimmt
+    // ausschliesslich der Auto-Hide-Timer nach 4s.
+    if (!_showControls) setState(() => _showControls = true);
+    _startHideControlsTimer();
   }
 
   int _getSeekSeconds(int clickCount) {
