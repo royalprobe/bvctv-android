@@ -32,8 +32,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Timer? _seekTimer;
   Timer? _uiTimer;
 
-  // Fake 2-Stunden-Timeline
-  static const Duration _fakeDuration = Duration(hours: 2);
+  // Anzeigedauer der Timeline. Fuer Laola-Streams (Live wie VOD) liefert
+  // VideoPlayerController die echte Dauer bzw. das DVR-Fenster — beides
+  // wollen wir 1:1 in der UI sehen, keine kuenstliche 2h-Kappe wie sie
+  // bei VBW-Highlights noetig ist. Fallback nur waehrend der ersten
+  // Millisekunden vor `initialize()` abgeschlossen ist.
+  Duration get _displayDuration {
+    final d = _controller.value.duration;
+    return d > Duration.zero ? d : const Duration(hours: 2);
+  }
   Duration _fakePosition = Duration.zero;
   bool _isInBlackScreen = false;
   Timer? _blackScreenTimer;
@@ -192,6 +199,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // UI-Tick alle 500ms: Position synchronisieren und Video-Ende erkennen
     _uiTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted || _isInBlackScreen) return;
+      // Waehrend Click-Akkumulation den setState aussetzen — sonst rebuilden
+      // Slider + Overlay alle 500ms mitten in der Klick-Sequenz und das
+      // Tippen fuehlt sich hakelig an. Nach dem Seek lebt der Timer normal
+      // weiter.
+      if (_seekTimer != null) return;
       final value = _controller.value;
       setState(() {
         _fakePosition = value.position;
@@ -228,8 +240,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (!_isPlaying) return;
       setState(() {
         _fakePosition += const Duration(milliseconds: 500);
-        if (_fakePosition >= _fakeDuration) {
-          _fakePosition = _fakeDuration;
+        if (_fakePosition >= _displayDuration) {
+          _fakePosition = _displayDuration;
           t.cancel();
         }
       });
@@ -238,7 +250,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _seekToFakePosition(Duration target) {
     if (target < Duration.zero) target = Duration.zero;
-    if (target > _fakeDuration) target = _fakeDuration;
+    if (target > _displayDuration) target = _displayDuration;
 
     final actualDuration = _controller.value.duration;
 
@@ -309,7 +321,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
 
     _seekTimer?.cancel();
-    _seekTimer = Timer(const Duration(milliseconds: 600), () {
+    // 800ms Akkumulationsfenster (frueher 600ms): gibt langsameren Klick-
+    // Sequenzen mehr Zeit zusammen ge-bundled zu werden, bevor der Seek
+    // ausgeloest wird und der Player buffert.
+    _seekTimer = Timer(const Duration(milliseconds: 800), () {
       final target = forward
           ? _fakePosition + Duration(seconds: _pendingSeekSeconds)
           : _fakePosition - Duration(seconds: _pendingSeekSeconds);
@@ -317,6 +332,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
       _seekClickCount = 0;
       _pendingSeekSeconds = 0;
+      _seekTimer = null;
       if (mounted) {
         setState(() => _showSeekOverlay = false);
         _startHideControlsTimer();
@@ -471,7 +487,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildControls() {
-    final progress = (_fakePosition.inMilliseconds / _fakeDuration.inMilliseconds).clamp(0.0, 1.0);
+    final progress = (_fakePosition.inMilliseconds / _displayDuration.inMilliseconds).clamp(0.0, 1.0);
 
     // Slider + IconButtons sind sonst fokussierbar und fangen DPad-Tasten ab.
     return ExcludeFocus(child: Container(
@@ -527,7 +543,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   child: Slider(
                     value: progress,
                     onChanged: (v) {
-                      _seekToFakePosition(_fakeDuration * v);
+                      _seekToFakePosition(_displayDuration * v);
                       _startHideControlsTimer();
                     },
                   ),
@@ -535,7 +551,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 Row(
                   children: [
                     Text(
-                      '${_formatDuration(_fakePosition)} / ${_formatDuration(_fakeDuration)}',
+                      '${_formatDuration(_fakePosition)} / ${_formatDuration(_displayDuration)}',
                       style: const TextStyle(color: Colors.white70, fontSize: 13),
                     ),
                     const Spacer(),
