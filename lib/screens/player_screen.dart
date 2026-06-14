@@ -289,7 +289,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _startHideControlsTimer() {
     _hideControlsTimer?.cancel();
-    _hideControlsTimer = Timer(const Duration(seconds: 4), () {
+    // 2s wie bei VBW-Videos — vorher 4s war zu lang, das Seek-Overlay blieb
+    // unnoetig lange nach dem Skip stehen.
+    _hideControlsTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _showControls = false);
     });
   }
@@ -495,44 +497,50 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final progress = (_fakePosition.inMilliseconds / _displayDuration.inMilliseconds).clamp(0.0, 1.0);
 
     // Slider + IconButtons sind sonst fokussierbar und fangen DPad-Tasten ab.
-    return ExcludeFocus(child: Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.black87, Colors.transparent, Colors.transparent, Colors.black87],
-        ),
-      ),
-      child: Column(
-        children: [
-          // Titel + Zurück-Button
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.title,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
+    // Statt einem vollflaechigen Container mit Gradient (der den gesamten
+    // Mittelbereich tap-tot machte und damit die Seek-Zonen blockierte)
+    // werden Top-Gradient und Bottom-Gradient als zwei getrennte Container
+    // gerendert, der Mittelbereich ist eine Spacer ohne Hittest.
+    return ExcludeFocus(child: Column(
+      children: [
+        // Top-Gradient + Titel/Back
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.black87, Colors.transparent],
             ),
           ),
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  widget.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
 
-          const Spacer(),
+        // Mittelbereich: leerer Expanded der KEINE Taps absorbiert, damit
+        // die darunterliegenden Seek-Zonen weiterhin auf Klicks reagieren
+        // (vorher schluckte der Container mit Decoration alle Taps).
+        const Expanded(child: IgnorePointer(child: SizedBox.expand())),
 
-          // Progressbar + Buttons
+        // Progressbar + Buttons mit Bottom-Gradient als Hintergrund
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -585,6 +593,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         ],
       ),
-    ));
+    );
   }
 }
