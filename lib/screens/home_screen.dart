@@ -706,6 +706,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   } else {
                     await _storage.delete(key: 'saved_password');
                   }
+                  // Der gecachte Silent-Login-Result (invalidCredentials
+                  // vom vorherigen Versuch) ist jetzt stale — beim naechsten
+                  // Video-Click soll der Login mit den neuen Daten frisch
+                  // durchlaufen.
+                  AuthState.lastSilentLoginResult = null;
                   if (ctx.mounted) Navigator.pop(ctx);
                 },
                 child: Text(S.save,
@@ -2180,6 +2185,30 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (AuthState.token.value.isNotEmpty) return true;
 
+    // Background-Silent-Login aus main.dart hat evtl. schon ein Ergebnis
+    // hinterlegt — dann direkt den passenden Fehler-Dialog zeigen statt
+    // erneut 5-15s im Vordergrund zu warten. networkError faellt raus
+    // weil wir da eh einen Retry brauchen; nach dem Retry ist der cached
+    // Wert dann fresh.
+    final cached = AuthState.lastSilentLoginResult;
+    if (cached != null && cached != SilentLoginResult.networkError) {
+      switch (cached) {
+        case SilentLoginResult.success:
+          // Token muesste gesetzt sein, kommen wir hier eigentlich nicht
+          // hin. Falls doch: normales Silent-Login als Fallback.
+          break;
+        case SilentLoginResult.noCredentials:
+          return _promptNoCredentials();
+        case SilentLoginResult.invalidCredentials:
+          return _promptInvalidCredentials();
+        case SilentLoginResult.deviceLimit:
+          await _promptDeviceLimit();
+          return false;
+        case SilentLoginResult.networkError:
+          break;
+      }
+    }
+
     // Erst pruefen ob ueberhaupt Credentials da sind — sonst gar nicht
     // den Silent-Flow anwerfen (der wuerde 18s auf Timeout warten).
     final email = await _storage.read(key: 'saved_email');
@@ -2337,6 +2366,7 @@ class _HomeScreenState extends State<HomeScreen> {
     SilentLoginOutcome outcome;
     try {
       outcome = await SilentLoginFlow.tryReloginDetailed();
+      AuthState.lastSilentLoginResult = outcome.result;
     } finally {
       AuthState.isLoggingIn.value = false;
     }

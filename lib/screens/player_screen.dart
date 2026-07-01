@@ -80,11 +80,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.arrowLeft) {
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.mediaRewind ||
+        key == LogicalKeyboardKey.mediaStepBackward ||
+        key == LogicalKeyboardKey.mediaSkipBackward) {
       _seek(false);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.arrowRight) {
+    if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.mediaFastForward ||
+        key == LogicalKeyboardKey.mediaStepForward ||
+        key == LogicalKeyboardKey.mediaSkipForward) {
       _seek(true);
       return KeyEventResult.handled;
     }
@@ -568,8 +574,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       style: const TextStyle(color: Colors.white70, fontSize: 13),
                     ),
                     const Spacer(),
+                    // Kein Icons.replay_10 / Icons.forward_30 mehr — die
+                    // haben Zahlen ("10"/"30") am Icon, das war irrefuehrend
+                    // weil die accumulated-seek-Sprungweite variabel ist
+                    // (10s → 30s → 1m → 3m → ...). Jetzt genau wie beim
+                    // VBW-Player: reine Pfeile ohne Beschriftung.
                     IconButton(
-                      icon: const Icon(Icons.replay_10, color: Colors.white, size: 32),
+                      icon: const Icon(Icons.fast_rewind, color: Colors.white, size: 36),
                       onPressed: () => _seek(false),
                     ),
                     IconButton(
@@ -581,7 +592,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       onPressed: _togglePlayPause,
                     ),
                     IconButton(
-                      icon: const Icon(Icons.forward_30, color: Colors.white, size: 32),
+                      icon: const Icon(Icons.fast_forward, color: Colors.white, size: 36),
                       onPressed: () => _seek(true),
                     ),
                     const Spacer(),

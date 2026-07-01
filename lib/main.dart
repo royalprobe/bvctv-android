@@ -69,13 +69,19 @@ Future<void> _refreshSessionInBackground(String initialToken) async {
     }
     final savedEmail = await storage.read(key: 'saved_email');
     if (savedEmail != null && savedEmail.isNotEmpty) {
-      final newToken = await SilentLoginFlow.tryRelogin();
-      if (newToken != null && newToken.isNotEmpty) {
+      // tryReloginDetailed liefert den Grund fuers Scheitern (falsche
+      // Creds, Device-Limit, Netz) — den speichern wir in AuthState,
+      // damit home_screen bei einem Video-Click direkt den passenden
+      // Dialog zeigen kann statt den Silent-Login nochmal live zu
+      // triggern und den User warten zu lassen.
+      final outcome = await SilentLoginFlow.tryReloginDetailed();
+      AuthState.lastSilentLoginResult = outcome.result;
+      if (outcome.isSuccess && outcome.token != null) {
         // SilentLoginFlow folgt selbst dem OAuth-Redirect auf tv.*, aber wir
         // pingen die Homepage nochmal explizit damit der Player garantiert
         // mit gesetzten Session-Cookies startet.
-        await AuthService.refreshTvCookies(newToken);
-        AuthState.token.value = newToken;
+        await AuthService.refreshTvCookies(outcome.token!);
+        AuthState.token.value = outcome.token!;
       }
     }
   } finally {

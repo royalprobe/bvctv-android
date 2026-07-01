@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'silent_login_flow.dart';
 
 /// Globaler Auth-Zustand. Wird von main.dart beim Start gesetzt und vom
 /// Background-Refresh / Silent-Login während der Sitzung aktualisiert.
@@ -9,6 +10,16 @@ import 'package:flutter/foundation.dart';
 class AuthState {
   static final ValueNotifier<String> token = ValueNotifier<String>('');
   static final ValueNotifier<bool> isLoggingIn = ValueNotifier<bool>(false);
+
+  /// Ergebnis des letzten (Background-)Silent-Login-Versuchs. Wird von
+  /// main.dart::_refreshSessionInBackground gesetzt und vom home_screen
+  /// bei Video-Click ausgewertet — damit der User bei einem Fehler direkt
+  /// die passende Meldung sieht ohne dass der Silent-Login ein zweites Mal
+  /// im Vordergrund laufen muss.
+  ///
+  /// Wird auf null gesetzt sobald der User die Zugangsdaten aendert (dann
+  /// ist das alte Ergebnis stale).
+  static SilentLoginResult? lastSilentLoginResult;
 
   /// Wartet bis ein nicht-leerer Token gesetzt ist ODER der laufende Silent-
   /// Login fertig (erfolglos) ist. Liefert `null` bei Timeout oder wenn gar
