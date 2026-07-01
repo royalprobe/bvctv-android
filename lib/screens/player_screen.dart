@@ -55,6 +55,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
   final FocusNode _rootFocusNode = FocusNode(debugLabel: 'LaolaPlayerRoot');
 
+  // Playback-Rate (1x/2x/4x/8x) — identisch zum VBW-Player, gesteuert
+  // ueber die Fast-Forward-/Rewind-Buttons auf der FireStick-Fernbedienung
+  // (mediaFastForward / mediaRewind). Auf Pause wird auf 1x zurueckgesetzt.
+  double _playbackRate = 1.0;
+  static const List<double> _kRates = [1.0, 2.0, 4.0, 8.0];
+
   // Aktuelle Auflösung von ExoPlayer. Für 10s nach Stream-Start sichtbar,
   // updated live bei ABR-Switches (falls Master-Fetch fehlschlug und auf ABR
   // zurückgefallen wurde).
@@ -80,18 +86,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.mediaRewind ||
-        key == LogicalKeyboardKey.mediaStepBackward ||
-        key == LogicalKeyboardKey.mediaSkipBackward) {
+    // DPad-Pfeile → akkumulierter Skip (10s → 30s → 1m → …). Media-
+    // FastForward/Rewind auf der FireStick-Fernbedienung → Playback-Rate
+    // wechseln (1x/2x/4x/8x). Genau wie beim VBW-Player.
+    if (key == LogicalKeyboardKey.arrowLeft) {
       _seek(false);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.mediaFastForward ||
+    if (key == LogicalKeyboardKey.arrowRight) {
+      _seek(true);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.mediaRewind ||
+        key == LogicalKeyboardKey.mediaStepBackward ||
+        key == LogicalKeyboardKey.mediaSkipBackward) {
+      _changePlaybackRate(false);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.mediaFastForward ||
         key == LogicalKeyboardKey.mediaStepForward ||
         key == LogicalKeyboardKey.mediaSkipForward) {
-      _seek(true);
+      _changePlaybackRate(true);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.select ||
@@ -288,8 +303,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } else {
       final playing = !_isPlaying;
       setState(() => _isPlaying = playing);
-      playing ? _controller.play() : _controller.pause();
+      if (playing) {
+        _controller.play();
+      } else {
+        _controller.pause();
+        // Beim Pausieren zurueck auf Normal-Geschwindigkeit — analog VBW.
+        if (_playbackRate != 1.0) {
+          _playbackRate = 1.0;
+          _controller.setPlaybackSpeed(1.0);
+        }
+      }
     }
+    _startHideControlsTimer();
+  }
+
+  /// Cyclt durch 1x/2x/4x/8x. Identisch zum VBW-Player. Bei Rate=1x wird
+  /// die Badge im OSD ausgeblendet.
+  void _changePlaybackRate(bool faster) {
+    final idx = _kRates.indexOf(_playbackRate);
+    final nextIdx = (faster ? idx + 1 : idx - 1).clamp(0, _kRates.length - 1);
+    final next = _kRates[nextIdx];
+    if (next == _playbackRate) return;
+    setState(() => _playbackRate = next);
+    // Wenn wir auf Rate-Change gehen wollen, muss auch gespielt werden —
+    // sonst passiert visuell nichts.
+    if (!_isPlaying) {
+      _controller.play();
+      setState(() => _isPlaying = true);
+    }
+    _controller.setPlaybackSpeed(next);
     _startHideControlsTimer();
   }
 
@@ -596,7 +638,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       onPressed: () => _seek(true),
                     ),
                     const Spacer(),
-                    const SizedBox(width: 80),
+                    // Rate-Badge (2x/4x/8x) analog zum VBW-Player. Bei 1x
+                    // ausgeblendet damit der Play-Button in der Mitte bleibt.
+                    if (_playbackRate > 1.0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${_playbackRate.toStringAsFixed(0)}×',
+                          style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      )
+                    else
+                      const SizedBox(width: 80),
                   ],
                 ),
               ],
