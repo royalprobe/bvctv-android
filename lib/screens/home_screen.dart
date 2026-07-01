@@ -827,7 +827,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showSettings() {
+  /// [focusSavedCredentials] setzt den Initial-Fokus auf den "Gespeicherte
+  /// Zugangsdaten"-Button statt auf den Logout-Knopf. Wird von den Login-
+  /// Fehler-Flows benutzt, damit der User beim Klick auf "Zugangsdaten
+  /// korrigieren" direkt visuell in der richtigen Sektion landet.
+  void _showSettings({bool focusSavedCredentials = false}) {
     String? updateMsg;
     showDialog(
       context: context,
@@ -933,6 +937,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 builder: (futureCtx, snapshot) {
                   final stored = snapshot.data ?? false;
                   return _TvFocusButton(
+                    autofocus: focusSavedCredentials,
                     borderRadius: 6,
                     onPressed: () async {
                       await _showSavedCredentialsDialog(ctx);
@@ -964,7 +969,10 @@ class _HomeScreenState extends State<HomeScreen> {
               const Divider(color: Colors.white12, height: 24),
               Row(children: [
                 _TvFocusButton(
-                  autofocus: true,
+                  // Wenn wir vom Login-Fehler-Flow her kommen, sitzt der
+                  // Initial-Fokus auf den Gespeicherte-Zugangsdaten-Button.
+                  // Sonst wie gehabt auf Logout.
+                  autofocus: !focusSavedCredentials,
                   borderRadius: 6,
                   onPressed: () async {
                     Navigator.pop(ctx);
@@ -2244,10 +2252,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return !cancelled;
   }
 
-  /// Zeigt einen "keine Zugangsdaten gespeichert"-Dialog mit Button in
-  /// unseren eigenen Credentials-Dialog. Nach erfolgreicher Eingabe
-  /// werden die Daten in FlutterSecureStorage gespeichert. Returns true
-  /// wenn der User Credentials gespeichert hat, false bei Cancel.
+  /// Zeigt einen "keine Zugangsdaten gespeichert"-Dialog. Der User wird
+  /// zu den normalen Options-Einstellungen weitergeleitet (Fokus auf die
+  /// "Gespeicherte Zugangsdaten"-Sektion) — kein separater Eingabedialog
+  /// mehr, weniger Fehlerpotential. Nach dem Schliessen der Options ist
+  /// der User zurueck auf der Video-Uebersicht.
   Future<bool> _promptNoCredentials() async {
     final go = await showDialog<bool>(
       context: context,
@@ -2259,8 +2268,8 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         content: Text(
           S.isEn
-              ? 'To watch Volleyball World videos, please save your VBW account credentials in BVCTV.'
-              : 'Um Volleyball-World-Videos anzuschauen, hinterlege bitte deine VBW-Zugangsdaten in BVCTV.',
+              ? 'To watch Volleyball World videos, save your VBW account credentials in the settings.'
+              : 'Um Volleyball-World-Videos anzuschauen, hinterlege deine VBW-Zugangsdaten in den Einstellungen.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -2275,116 +2284,16 @@ class _HomeScreenState extends State<HomeScreen> {
               foregroundColor: Colors.black,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(S.isEn ? 'Enter credentials' : 'Zugangsdaten eingeben'),
+            child: Text(S.isEn ? 'Open settings' : 'Einstellungen oeffnen'),
           ),
         ],
       ),
     );
     if (go != true || !mounted) return false;
-    return _showCredentialsInputDialog();
-  }
-
-  /// Unser eigener Credentials-Dialog (Email + Passwort). Bei Save landen
-  /// die Daten in FlutterSecureStorage. Returns true bei Save, false bei
-  /// Cancel oder Fehler.
-  Future<bool> _showCredentialsInputDialog({String? prefillEmail}) async {
-    final savedEmail = prefillEmail ??
-        (await _storage.read(key: 'saved_email')) ??
-        '';
-    if (!mounted) return false;
-    final emailCtrl = TextEditingController(text: savedEmail);
-    final pwCtrl = TextEditingController();
-    bool obscure = true;
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSt) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          title: Text(
-            S.isEn ? 'Volleyball World Account' : 'Volleyball-World-Zugang',
-            style: const TextStyle(color: Colors.white),
-          ),
-          content: SizedBox(
-            width: 360,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: emailCtrl,
-                  autofocus: true,
-                  keyboardType: TextInputType.emailAddress,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: S.isEn ? 'Email' : 'E-Mail',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF2A2A2A),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Colors.orange, width: 2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: pwCtrl,
-                  obscureText: obscure,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: S.isEn ? 'Password' : 'Passwort',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF2A2A2A),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Colors.orange, width: 2),
-                    ),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        obscure ? Icons.visibility_off : Icons.visibility,
-                        color: Colors.white54,
-                      ),
-                      onPressed: () => setSt(() => obscure = !obscure),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(S.cancel,
-                  style: const TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.black,
-              ),
-              onPressed: () async {
-                final e = emailCtrl.text.trim();
-                final p = pwCtrl.text;
-                if (e.isEmpty || p.isEmpty) return;
-                await _storage.write(key: 'saved_email', value: e);
-                await _storage.write(key: 'saved_password', value: p);
-                if (ctx.mounted) Navigator.pop(ctx, true);
-              },
-              child: Text(S.save),
-            ),
-          ],
-        ),
-      ),
-    );
-    return saved == true;
+    _showSettings(focusSavedCredentials: true);
+    // Der User bleibt bewusst nach Options-close auf der Video-Uebersicht —
+    // wir versuchen NICHT automatisch das Video zu starten. Er klickt neu.
+    return false;
   }
 
   /// Zeigt einen nicht-cancelbaren Spinner an, feuert `tryReloginDetailed`
@@ -2485,7 +2394,11 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (go != true || !mounted) return false;
-    return _showCredentialsInputDialog();
+    // Wie bei _promptNoCredentials: direkt in die Options mit Fokus auf
+    // die Zugangsdaten-Sektion. Kein separater Dialog, kein Auto-Retry —
+    // der User klickt das Video neu wenn er fertig ist.
+    _showSettings(focusSavedCredentials: true);
+    return false;
   }
 
   Future<void> _promptDeviceLimit() async {
