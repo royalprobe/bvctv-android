@@ -2790,7 +2790,21 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: const Text('BVCTV', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, letterSpacing: 4)),
+        // Titel: das echte BVCTV-Logo (Volleyball-Icon + Schriftzug) in
+        // einem oranger Kreis — identisch zum Header der Web-App-Variante.
+        // 40x40, 4px Padding, Kreis = border-radius 50% via ClipOval.
+        title: Container(
+          width: 40,
+          height: 40,
+          decoration: const BoxDecoration(
+            color: Colors.orange,
+            shape: BoxShape.circle,
+          ),
+          padding: const EdgeInsets.all(4),
+          child: ClipOval(
+            child: Image.asset('assets/bvctv_logo.png', fit: BoxFit.contain),
+          ),
+        ),
         backgroundColor: const Color(0xFF0A0A0A),
         actions: [
           IconButton(
