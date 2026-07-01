@@ -2300,7 +2300,14 @@ class _HomeScreenState extends State<HomeScreen> {
   /// im Hintergrund und interpretiert das Ergebnis. Bei Bedarf oeffnet
   /// er Folge-Dialoge (falsche Creds → Korrektur-Dialog; Device-Limit →
   /// Reset-Hinweis; Netz-Fehler → generisch).
-  Future<bool> _runSilentLoginWithSpinner() async {
+  ///
+  /// [retriesLeft] steuert wie oft nach einem `networkError` automatisch
+  /// nachgesetzt wird. Direkt nach einer fehlgeschlagenen Login-Runde
+  /// (falsches Passwort) bleiben LoginRadius-Cookies + PKCE-Verifier des
+  /// vorherigen Versuchs im HeadlessWebView haengen — der naechste
+  /// Token-Exchange scheitert oft mit 400 obwohl Creds jetzt korrekt sind.
+  /// Ein einmaliger Retry mit frischem Verifier klaert das zuverlaessig.
+  Future<bool> _runSilentLoginWithSpinner({int retriesLeft = 1}) async {
     if (!mounted) return false;
     // Spinner
     unawaited(showDialog<void>(
@@ -2355,6 +2362,13 @@ class _HomeScreenState extends State<HomeScreen> {
         await _promptDeviceLimit();
         return false;
       case SilentLoginResult.networkError:
+        // Auto-Retry: siehe Doc-Kommentar zu retriesLeft. Erst wenn auch
+        // der zweite Versuch mit frischem PKCE-Verifier scheitert, ist
+        // wirklich das Netz kaputt und der User bekommt den Dialog.
+        if (retriesLeft > 0) {
+          debugPrint('[bvctv-login] networkError → auto-retry (${retriesLeft - 1} left)');
+          return _runSilentLoginWithSpinner(retriesLeft: retriesLeft - 1);
+        }
         await _promptGenericError();
         return false;
     }
