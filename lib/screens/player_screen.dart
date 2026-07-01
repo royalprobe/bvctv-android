@@ -361,26 +361,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _seek(bool forward) {
-    if (_seekingForward != forward) {
-      _seekClickCount = 0;
+    _seekTimer?.cancel();
+    // Netto-Akkumulation wie beim VBW-Player: +1 vorwaerts, -1 rueckwaerts.
+    // 3x rechts + 1x links = +2 (nicht neuer 1x-Sprung nach links). Bei 0
+    // wird der Sprung komplett abgebrochen — der User kann so einen zu
+    // grossen Sprung wieder auf 0 zurueckklicken ohne Auto-Trigger.
+    _seekClickCount += forward ? 1 : -1;
+
+    if (_seekClickCount == 0) {
       _pendingSeekSeconds = 0;
+      setState(() {
+        _showSeekOverlay = false;
+      });
+      _startHideControlsTimer();
+      return;
     }
-    _seekingForward = forward;
-    _seekClickCount++;
-    _pendingSeekSeconds = _getSeekSeconds(_seekClickCount);
+
+    final isForward = _seekClickCount > 0;
+    final absCount = _seekClickCount.abs();
+    _pendingSeekSeconds = _getSeekSeconds(absCount);
+    _seekingForward = isForward; // Overlay-Icon
 
     setState(() {
       _showSeekOverlay = true;
-      _seekOverlayText = '${forward ? '+' : '-'}${_formatSeekTime(_pendingSeekSeconds)}';
+      _seekOverlayText =
+          '${isForward ? '+' : '-'}${_formatSeekTime(_pendingSeekSeconds)}';
       _showControls = true;
     });
 
-    _seekTimer?.cancel();
-    // 800ms Akkumulationsfenster (frueher 600ms): gibt langsameren Klick-
-    // Sequenzen mehr Zeit zusammen ge-bundled zu werden, bevor der Seek
-    // ausgeloest wird und der Player buffert.
+    // 800ms Akkumulationsfenster: gibt langsameren Klick-Sequenzen Zeit
+    // ge-bundled zu werden, bevor der Seek ausgeloest wird und der Player
+    // buffert.
     _seekTimer = Timer(const Duration(milliseconds: 800), () {
-      final target = forward
+      final target = isForward
           ? _fakePosition + Duration(seconds: _pendingSeekSeconds)
           : _fakePosition - Duration(seconds: _pendingSeekSeconds);
       _seekToFakePosition(target);
