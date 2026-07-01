@@ -21,12 +21,17 @@ void main() async {
   final hasSavedCreds = (results[2] ?? '').isNotEmpty;
   AuthState.token.value = initialToken;
 
-  // Wenn entweder ein Token (egal wie alt) oder gespeicherte Credentials
-  // vorhanden sind, geht's direkt zur HomeScreen. Listen-APIs laufen auch
-  // ohne Token; ein eventuell nötiger Refresh läuft im Hintergrund.
-  runApp(BVCTVApp(showHomeInitially: initialToken.isNotEmpty || hasSavedCreds));
+  // HomeScreen IMMER direkt zeigen — Listen-APIs (Turniere + Videos) laufen
+  // ohne Token, Credentials brauchen wir erst beim tatsaechlichen Video-Play
+  // (siehe _ensureLoggedIn in home_screen.dart::_launchPlayer, das den
+  // interaktiven LoginScreen bei Bedarf pusht). Damit sieht der User beim
+  // App-Start sofort die Turniere, ohne dass ein evtl. hakender Login-Refresh
+  // den ganzen Startup blockiert.
+  runApp(const BVCTVApp(showHomeInitially: true));
 
   if (initialToken.isNotEmpty || hasSavedCreds) {
+    // Background-Refresh nur wenn schon eine Session hinterlegt ist — sonst
+    // waeren die Puppeteer-Roundtrips im Void.
     unawaited(_refreshSessionInBackground(initialToken));
   }
 }

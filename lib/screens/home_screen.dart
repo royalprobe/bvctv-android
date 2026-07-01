@@ -2139,15 +2139,262 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Erzwingt eine frische Session: stales Token verwerfen, Silent-Re-Login
-  /// laufen lassen (mit Spinner), bei Misserfolg auf interaktiven LoginScreen
-  /// zurückfallen.
+  /// Erzwingt eine frische Session (Player hat stale-token erkannt).
+  /// Delegiert an [_ensureLoggedIn], das den kompletten Flow inklusive
+  /// Dialoge fuer keine/falsche Creds und Device-Limit uebernimmt. Kein
+  /// interaktiver LoginScreen mehr.
   Future<bool> _refreshSessionForced() async {
     if (!mounted) return false;
     AuthState.token.value = '';
+    return _ensureLoggedIn();
+  }
 
-    // Nicht-await'ed: das Spinner-Dialog wird unten manuell wieder gepoppt.
-    showDialog<void>(
+  /// Stellt sicher dass eine frische Session verfuegbar ist, bevor der VBW-
+  /// Player geoeffnet wird. Neuer Flow (v1.0.128) — der User bekommt NIE
+  /// die offizielle Volleyball-World Signin-Seite zu sehen:
+  ///
+  ///   1. Session laeuft schon → Spinner warten.
+  ///   2. Token frisch → true.
+  ///   3. Keine gespeicherten Zugangsdaten → Dialog "Zugangsdaten
+  ///      hinterlegen" oeffnet unseren eigenen Credentials-Dialog.
+  ///   4. Zugangsdaten da → Silent-Login-Versuch mit Spinner. Je nach
+  ///      Ergebnis:
+  ///        - Erfolg → Player laeuft.
+  ///        - Zugangsdaten abgelehnt → Dialog + Button "Zugangsdaten
+  ///          korrigieren" (unser eigener Dialog, kein VBW-Login).
+  ///        - Device-Limit → Dialog mit Hinweis "Passwort in offizieller
+  ///          VBW-App reseten", nur "Zurueck zur Uebersicht" (kein Retry).
+  ///        - Netz-/anderer Fehler → generischer Retry-Dialog.
+  Future<bool> _ensureLoggedIn() async {
+    if (AuthState.isLoggingIn.value) {
+      final ok = await _waitForOngoingLogin();
+      if (!ok) return false;
+    }
+    if (AuthState.token.value.isNotEmpty) return true;
+
+    // Erst pruefen ob ueberhaupt Credentials da sind — sonst gar nicht
+    // den Silent-Flow anwerfen (der wuerde 18s auf Timeout warten).
+    final email = await _storage.read(key: 'saved_email');
+    final password = await _storage.read(key: 'saved_password');
+    final hasCreds = (email ?? '').isNotEmpty && (password ?? '').isNotEmpty;
+    if (!hasCreds) {
+      if (!mounted) return false;
+      final ok = await _promptNoCredentials();
+      if (!ok) return false;
+      // Weiter mit dem frisch gespeicherten Login-Versuch.
+    }
+    return _runSilentLoginWithSpinner();
+  }
+
+  /// Waiter fuer den Fall dass schon ein Silent-Login-Versuch parallel
+  /// laeuft (z.B. der Background-Refresh aus main.dart). Cancel gibt
+  /// false zurueck.
+  Future<bool> _waitForOngoingLogin() async {
+    bool cancelled = false;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        void close() {
+          try {
+            if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
+          } catch (_) {}
+        }
+        void listener() {
+          if (!AuthState.isLoggingIn.value) {
+            AuthState.isLoggingIn.removeListener(listener);
+            close();
+          }
+        }
+        AuthState.isLoggingIn.addListener(listener);
+        Timer(const Duration(seconds: 20), () {
+          AuthState.isLoggingIn.removeListener(listener);
+          close();
+        });
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          content: Row(children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.orange),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                S.isEn ? 'Signing in...' : 'Anmeldung laeuft...',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ]),
+          actions: [
+            TextButton(
+              onPressed: () {
+                cancelled = true;
+                Navigator.pop(ctx);
+              },
+              child: Text(S.cancel,
+                  style: const TextStyle(color: Colors.white54)),
+            ),
+          ],
+        );
+      },
+    );
+    return !cancelled;
+  }
+
+  /// Zeigt einen "keine Zugangsdaten gespeichert"-Dialog mit Button in
+  /// unseren eigenen Credentials-Dialog. Nach erfolgreicher Eingabe
+  /// werden die Daten in FlutterSecureStorage gespeichert. Returns true
+  /// wenn der User Credentials gespeichert hat, false bei Cancel.
+  Future<bool> _promptNoCredentials() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          S.isEn ? 'No credentials saved' : 'Keine Zugangsdaten gespeichert',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          S.isEn
+              ? 'To watch Volleyball World videos, please save your VBW account credentials in BVCTV.'
+              : 'Um Volleyball-World-Videos anzuschauen, hinterlege bitte deine VBW-Zugangsdaten in BVCTV.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(S.isEn ? 'Back' : 'Zurueck',
+                style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(S.isEn ? 'Enter credentials' : 'Zugangsdaten eingeben'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return false;
+    return _showCredentialsInputDialog();
+  }
+
+  /// Unser eigener Credentials-Dialog (Email + Passwort). Bei Save landen
+  /// die Daten in FlutterSecureStorage. Returns true bei Save, false bei
+  /// Cancel oder Fehler.
+  Future<bool> _showCredentialsInputDialog({String? prefillEmail}) async {
+    final savedEmail = prefillEmail ??
+        (await _storage.read(key: 'saved_email')) ??
+        '';
+    if (!mounted) return false;
+    final emailCtrl = TextEditingController(text: savedEmail);
+    final pwCtrl = TextEditingController();
+    bool obscure = true;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          title: Text(
+            S.isEn ? 'Volleyball World Account' : 'Volleyball-World-Zugang',
+            style: const TextStyle(color: Colors.white),
+          ),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: emailCtrl,
+                  autofocus: true,
+                  keyboardType: TextInputType.emailAddress,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: S.isEn ? 'Email' : 'E-Mail',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF2A2A2A),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide:
+                          const BorderSide(color: Colors.orange, width: 2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwCtrl,
+                  obscureText: obscure,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: S.isEn ? 'Password' : 'Passwort',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF2A2A2A),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide:
+                          const BorderSide(color: Colors.orange, width: 2),
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscure ? Icons.visibility_off : Icons.visibility,
+                        color: Colors.white54,
+                      ),
+                      onPressed: () => setSt(() => obscure = !obscure),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(S.cancel,
+                  style: const TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () async {
+                final e = emailCtrl.text.trim();
+                final p = pwCtrl.text;
+                if (e.isEmpty || p.isEmpty) return;
+                await _storage.write(key: 'saved_email', value: e);
+                await _storage.write(key: 'saved_password', value: p);
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              },
+              child: Text(S.save),
+            ),
+          ],
+        ),
+      ),
+    );
+    return saved == true;
+  }
+
+  /// Zeigt einen nicht-cancelbaren Spinner an, feuert `tryReloginDetailed`
+  /// im Hintergrund und interpretiert das Ergebnis. Bei Bedarf oeffnet
+  /// er Folge-Dialoge (falsche Creds → Korrektur-Dialog; Device-Limit →
+  /// Reset-Hinweis; Netz-Fehler → generisch).
+  Future<bool> _runSilentLoginWithSpinner() async {
+    if (!mounted) return false;
+    // Spinner
+    unawaited(showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
@@ -2162,115 +2409,142 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 16),
           Expanded(
             child: Text(
-              S.isEn ? 'Refreshing session...' : 'Aktualisiere Anmeldung...',
+              S.isEn ? 'Signing in...' : 'Anmeldung laeuft...',
               style: const TextStyle(color: Colors.white),
             ),
           ),
         ]),
       ),
-    );
+    ));
 
-    bool ok = false;
     AuthState.isLoggingIn.value = true;
+    SilentLoginOutcome outcome;
     try {
-      final email = await _storage.read(key: 'saved_email');
-      if (email != null && email.isNotEmpty) {
-        final newToken = await SilentLoginFlow.tryRelogin();
-        if (newToken != null && newToken.isNotEmpty) {
-          await AuthService.refreshTvCookies(newToken);
-          AuthState.token.value = newToken;
-          ok = true;
-        }
-      }
+      outcome = await SilentLoginFlow.tryReloginDetailed();
     } finally {
       AuthState.isLoggingIn.value = false;
     }
-
     if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+    if (!mounted) return false;
 
-    if (!ok) {
-      if (!mounted) return false;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-      return AuthState.token.value.isNotEmpty;
+    switch (outcome.result) {
+      case SilentLoginResult.success:
+        final token = outcome.token!;
+        AuthState.token.value = token;
+        await AuthService.refreshTvCookies(token);
+        return true;
+      case SilentLoginResult.noCredentials:
+        // Sollte hier eigentlich nicht passieren — trotzdem behandeln.
+        final ok = await _promptNoCredentials();
+        if (!ok) return false;
+        return _runSilentLoginWithSpinner();
+      case SilentLoginResult.invalidCredentials:
+        final ok = await _promptInvalidCredentials();
+        if (!ok) return false;
+        return _runSilentLoginWithSpinner();
+      case SilentLoginResult.deviceLimit:
+        await _promptDeviceLimit();
+        return false;
+      case SilentLoginResult.networkError:
+        await _promptGenericError();
+        return false;
     }
-    return true;
   }
 
-  /// Stellt sicher dass eine frische Session verfügbar ist, bevor der VBW-Player
-  /// geöffnet wird. Reihenfolge:
-  ///   1. Silent-Login läuft → Spinner-Dialog warten (max 15s, cancel-bar).
-  ///      Auch wenn ein alter Token in [AuthState] steht: die tv.* Cookies
-  ///      könnten gerade erst erneuert werden, also IMMER warten.
-  ///   2. Token vorhanden → weiter.
-  ///   3. Sonst → interaktiver LoginScreen wird gepushed.
-  Future<bool> _ensureLoggedIn() async {
-    if (AuthState.isLoggingIn.value) {
-      bool cancelled = false;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) {
-          void close() {
-            try {
-              if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
-            } catch (_) {}
-          }
-          void listener() {
-            if (!AuthState.isLoggingIn.value) {
-              AuthState.isLoggingIn.removeListener(listener);
-              close();
-            }
-          }
-          AuthState.isLoggingIn.addListener(listener);
-          // Safety-Timeout: SilentLoginFlow dauert i.d.R. 3-15s
-          Timer(const Duration(seconds: 15), () {
-            AuthState.isLoggingIn.removeListener(listener);
-            close();
-          });
-          return AlertDialog(
-            backgroundColor: const Color(0xFF1A1A1A),
-            content: Row(children: [
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.orange),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Text(
-                  S.isEn ? 'Signing in...' : 'Anmeldung läuft...',
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ),
-            ]),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  cancelled = true;
-                  Navigator.pop(ctx);
-                },
-                child: Text(S.cancel,
-                    style: const TextStyle(color: Colors.white54)),
-              ),
-            ],
-          );
-        },
-      );
-      if (cancelled) return false;
-    }
-
-    if (AuthState.token.value.isNotEmpty) return true;
-
-    if (!mounted) return false;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+  Future<bool> _promptInvalidCredentials() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          S.isEn ? 'Login failed' : 'Anmeldung fehlgeschlagen',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          S.isEn
+              ? 'Volleyball World rejected the stored credentials. Please correct them.'
+              : 'Volleyball World hat die gespeicherten Zugangsdaten abgelehnt. Bitte korrigiere sie.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(S.isEn ? 'Back' : 'Zurueck',
+                style: const TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+                S.isEn ? 'Update credentials' : 'Zugangsdaten korrigieren'),
+          ),
+        ],
+      ),
     );
-    return AuthState.token.value.isNotEmpty;
+    if (go != true || !mounted) return false;
+    return _showCredentialsInputDialog();
+  }
+
+  Future<void> _promptDeviceLimit() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          S.isEn ? 'Device limit reached' : 'Geraete-Limit erreicht',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          S.isEn
+              ? 'Volleyball World allows only 3 signed-in devices. Please open the official Volleyball World app and reset your password there to sign out the other devices. Do NOT try to reset it here.'
+              : 'Volleyball World erlaubt nur 3 gleichzeitig angemeldete Geraete. Bitte oeffne die offizielle Volleyball-World-App und setze dort dein Passwort zurueck, um die anderen Geraete auszuloggen. Bitte NICHT hier zuruecksetzen.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+                S.isEn ? 'Back to overview' : 'Zurueck zur Uebersicht'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _promptGenericError() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          S.isEn ? 'Login failed' : 'Anmeldung fehlgeschlagen',
+          style: const TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          S.isEn
+              ? 'Please check your internet connection and try again.'
+              : 'Bitte pruefe deine Internetverbindung und versuche es erneut.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(S.isEn ? 'Back' : 'Zurueck'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showLiveDialog(VideoItem video) {

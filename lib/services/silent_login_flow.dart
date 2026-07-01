@@ -8,6 +8,30 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+/// Grund fuers Scheitern eines Silent-Login-Versuchs. Wird an das UI
+/// weitergegeben damit dem User pro Fall eine sinnvolle Aktion angeboten
+/// werden kann (Creds korrigieren vs. Passwort extern reseten).
+enum SilentLoginResult {
+  success,
+  noCredentials, // saved_email/password fehlt in FlutterSecureStorage
+  invalidCredentials, // signin.* akzeptiert die Creds nicht (Timeout ohne Redirect)
+  deviceLimit, // VBW-3-Geraete-Limit — "Device Limit Reached"-Page
+  networkError, // http-Fehler / WebView-Exception
+}
+
+class SilentLoginOutcome {
+  final SilentLoginResult result;
+  final String? token;
+  const SilentLoginOutcome._(this.result, {this.token});
+  static const noCredentials = SilentLoginOutcome._(SilentLoginResult.noCredentials);
+  static const invalidCredentials = SilentLoginOutcome._(SilentLoginResult.invalidCredentials);
+  static const deviceLimit = SilentLoginOutcome._(SilentLoginResult.deviceLimit);
+  static const networkError = SilentLoginOutcome._(SilentLoginResult.networkError);
+  factory SilentLoginOutcome.success(String token) =>
+      SilentLoginOutcome._(SilentLoginResult.success, token: token);
+  bool get isSuccess => result == SilentLoginResult.success;
+}
+
 /// Versucht einen kompletten OAuth-Flow ohne sichtbares UI:
 /// HeadlessInAppWebView lädt die /authorize-URL → wenn das signin-Formular
 /// rendert, füllt unser Autofill-JS die gespeicherten Credentials ein und
@@ -26,12 +50,23 @@ class SilentLoginFlow {
 
   static const _storage = FlutterSecureStorage();
 
+  /// Legacy-Wrapper — gibt bei Erfolg den Token zurueck, sonst null.
+  /// Wird von main.dart:_refreshSessionInBackground genutzt wo nur
+  /// success/fail interessiert.
   static Future<String?> tryRelogin() async {
+    final outcome = await tryReloginDetailed();
+    return outcome.token;
+  }
+
+  /// Wie [tryRelogin], aber mit detailliertem Fehler-Grund (fuer die UI im
+  /// home_screen, damit der User bei falschen Creds und Device-Limit die
+  /// jeweils passende Aktion angeboten bekommt).
+  static Future<SilentLoginOutcome> tryReloginDetailed() async {
     final email = await _storage.read(key: 'saved_email');
     final password = await _storage.read(key: 'saved_password');
     if (email == null || email.isEmpty || password == null || password.isEmpty) {
       debugPrint('[bvctv-silent] no credentials, skip');
-      return null;
+      return SilentLoginOutcome.noCredentials;
     }
 
     final codeVerifier = _generateCodeVerifier();
@@ -52,23 +87,29 @@ class SilentLoginFlow {
       'workflow': 'fulljitflow_v3_fast',
     }).toString();
 
-    final completer = Completer<String?>();
+    final completer = Completer<SilentLoginOutcome>();
     HeadlessInAppWebView? headless;
-    Timer? timeout;
+    Timer? timeoutTimer;
+    Timer? deviceLimitPoll;
     String? pendingCode;
     final autofillJs = _buildAutofillScript(email, password);
 
-    void finish(String? token) {
-      timeout?.cancel();
+    void finish(SilentLoginOutcome outcome) {
+      timeoutTimer?.cancel();
+      deviceLimitPoll?.cancel();
       try {
         headless?.dispose();
       } catch (_) {}
-      if (!completer.isCompleted) completer.complete(token);
+      if (!completer.isCompleted) completer.complete(outcome);
     }
 
-    timeout = Timer(const Duration(seconds: 18), () {
-      debugPrint('[bvctv-silent] timeout');
-      finish(null);
+    // Timeout ohne erfolgreichen Redirect zu tv.* interpretieren wir als
+    // "Credentials passen nicht" — sonst waeren wir laengst durch. Falls
+    // sich zwischenzeitlich die Device-Limit-Page gemeldet hat, hat der
+    // Poll-Handler unten die Result-Variante bereits ueberschrieben.
+    timeoutTimer = Timer(const Duration(seconds: 18), () {
+      debugPrint('[bvctv-silent] timeout — assuming invalid credentials');
+      finish(SilentLoginOutcome.invalidCredentials);
     });
 
     headless = HeadlessInAppWebView(
@@ -88,7 +129,7 @@ class SilentLoginFlow {
             return NavigationActionPolicy.ALLOW;
           } else if (params.containsKey('error')) {
             debugPrint('[bvctv-silent] error: ${params['error']}');
-            finish(null);
+            finish(SilentLoginOutcome.invalidCredentials);
             return NavigationActionPolicy.CANCEL;
           }
         }
@@ -98,7 +139,43 @@ class SilentLoginFlow {
         final u = url?.toString() ?? '';
         debugPrint('[bvctv-silent] loaded: $u');
         if (u.startsWith('https://signin.volleyballworld.com')) {
+          // Device-Limit-Page erkennen bevor der Autofill den "Verify"-
+          // Button druecken kann (der Password-Reset-Flow ausloest). Wenn
+          // das Body-Text "Device Limit Reached" / "signed in on 3 devices"
+          // enthaelt, brechen wir ab.
+          try {
+            final txt = await controller.evaluateJavascript(source:
+              "(document.body && (document.body.innerText || '')).toLowerCase()")
+              as String?;
+            if (txt != null &&
+                (txt.contains('device limit') ||
+                 txt.contains('signed in on 3 devices'))) {
+              debugPrint('[bvctv-silent] device-limit detected — abort');
+              finish(SilentLoginOutcome.deviceLimit);
+              return;
+            }
+          } catch (_) {}
           await controller.evaluateJavascript(source: autofillJs);
+
+          // Nach dem Autofill-Submit kann der Device-Limit-Bildschirm mit
+          // leichter Verzoegerung nachrutschen. Alle 500ms nachschauen bis
+          // wir entweder erfolgreich weitergeleitet werden oder der
+          // Overall-Timeout schlaegt.
+          deviceLimitPoll ??= Timer.periodic(const Duration(milliseconds: 500),
+              (t) async {
+            if (completer.isCompleted) { t.cancel(); return; }
+            try {
+              final txt2 = await controller.evaluateJavascript(source:
+                "(document.body && (document.body.innerText || '')).toLowerCase()")
+                as String?;
+              if (txt2 != null &&
+                  (txt2.contains('device limit') ||
+                   txt2.contains('signed in on 3 devices'))) {
+                debugPrint('[bvctv-silent] device-limit detected mid-flow');
+                finish(SilentLoginOutcome.deviceLimit);
+              }
+            } catch (_) {}
+          });
         }
         if (pendingCode != null &&
             u.startsWith('https://tv.volleyballworld.com') &&
@@ -108,7 +185,11 @@ class SilentLoginFlow {
           final code = pendingCode!;
           pendingCode = null;
           final token = await _exchangeCode(code, codeVerifier);
-          finish(token);
+          if (token != null && token.isNotEmpty) {
+            finish(SilentLoginOutcome.success(token));
+          } else {
+            finish(SilentLoginOutcome.networkError);
+          }
         }
       },
       onReceivedError: (controller, request, error) {
@@ -120,7 +201,7 @@ class SilentLoginFlow {
       await headless.run();
     } catch (e) {
       debugPrint('[bvctv-silent] run exception: $e');
-      finish(null);
+      finish(SilentLoginOutcome.networkError);
     }
 
     return completer.future;
