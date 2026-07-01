@@ -3067,35 +3067,19 @@ class _HomeScreenState extends State<HomeScreen> {
               ElevatedButton(onPressed: _loadVideos, child: Text(S.tryAgain)),
             ]))
           : Column(children: [
+                  // Zeile 1: Source-Toggles (VBTV/Laola1/GBT) links —
+                  // Gender-Filter (Alle/Herren/Damen) rechts. Beide Gruppen
+                  // sind Chip-basiert, gleiche Optik, Spacer trennt sie.
                   Container(
                     color: const Color(0xFF0A0A0A),
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                    // Source-Toggles VBTV/Laola1/GBT — analog zur Web-App.
-                    // Bestimmen welche Turniere im Dropdown drunter gelistet
-                    // werden. Chip-Style identisch zu den Gender-Filter-Chips
-                    // damit die Optik konsistent bleibt.
                     child: Row(children: [
                       _sourceChip('VBTV',   'vbw'),
                       const SizedBox(width: 8),
                       _sourceChip('Laola1', 'laola'),
                       const SizedBox(width: 8),
                       _sourceChip('GBT',    'twitch'),
-                    ]),
-                  ),
-                  Container(
-                    color: const Color(0xFF0A0A0A),
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                    // Turnier-Dropdown allein in eigener Zeile — vorher lag
-                    // er rechts neben den Gender-Chips, das war beim TV-
-                    // Fokus umstaendlich zu erreichen.
-                    child: Row(children: [
-                      _tournamentDropdown(),
-                    ]),
-                  ),
-                  Container(
-                    color: const Color(0xFF0A0A0A),
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                    child: Row(children: [
+                      const Spacer(),
                       _filterChip(S.all, 'all', autofocus: true),
                       const SizedBox(width: 8),
                       _filterChip(S.men, 'men'),
@@ -3103,21 +3087,37 @@ class _HomeScreenState extends State<HomeScreen> {
                       _filterChip(S.women, 'women'),
                     ]),
                   ),
-                  if (_availablePlayers.isNotEmpty || _availableCountries.isNotEmpty)
-                    Container(
-                      color: const Color(0xFF0A0A0A),
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                      child: Row(children: [
-                        _playerDropdown(),
-                        if (_availablePlayers.isNotEmpty && _availableCountries.isNotEmpty)
-                          const SizedBox(width: 8),
-                        _countryDropdown(),
-                      ]),
-                    ),
+                  // Zeile 2: Turnier-Dropdown links — Player + Country
+                  // Dropdowns rechts (jeweils nur wenn Daten da sind).
+                  Container(
+                    color: const Color(0xFF0A0A0A),
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Row(children: [
+                      _tournamentDropdown(),
+                      const Spacer(),
+                      if (_availablePlayers.isNotEmpty) _playerDropdown(),
+                      if (_availablePlayers.isNotEmpty && _availableCountries.isNotEmpty)
+                        const SizedBox(width: 8),
+                      if (_availableCountries.isNotEmpty) _countryDropdown(),
+                    ]),
+                  ),
                   if (_isLoading)
                     const LinearProgressIndicator(color: Colors.orange, backgroundColor: Colors.transparent, minHeight: 2),
                   Expanded(
-                    child: _isLoading && _videos.isEmpty
+                    child: (!_sourceVbw && !_sourceLaola && !_sourceTwitch)
+                        // Alle drei Sources aus → weder Turniere noch Videos
+                        // zeigen (die Dropdown ist schon leer). Hinweis
+                        // damit der User weiss was zu tun ist.
+                        ? Center(
+                            child: Text(
+                              S.isEn
+                                  ? 'No source active — enable VBTV, Laola1 or GBT above.'
+                                  : 'Keine Quelle aktiv — VBTV, Laola1 oder GBT oben einblenden.',
+                              style: const TextStyle(color: Colors.white54),
+                              textAlign: TextAlign.center,
+                            ),
+                          )
+                        : _isLoading && _videos.isEmpty
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : LayoutBuilder(builder: (context, constraints) {
                             final isTV = constraints.maxWidth > 900 || constraints.maxHeight > 900;
