@@ -23,6 +23,8 @@ import '../services/auth_state.dart';
 import '../services/silent_login_flow.dart';
 import '../services/laola_stream_extractor.dart';
 import '../services/laola_livestream_scraper.dart';
+import '../services/twitch_api.dart';
+import 'player_screen.dart';
 
 class VideoItem {
   final String id;
@@ -53,9 +55,13 @@ class VideoItem {
     this.linkUrl,
   });
 
-  bool get isExternal => linkUrl != null;
+  bool get isExternal => linkUrl != null && !isTwitch;
   bool get isYouTube => linkUrl != null && linkUrl!.contains('youtube.com');
   bool get isLaola => linkUrl != null && linkUrl!.contains('laola1.at');
+  // Twitch-Videos werden nicht extern per launchUrl geoeffnet — stattdessen
+  // ueber TwitchStream.extractMasterUrl und dem native PlayerScreen.
+  bool get isTwitch => linkUrl != null && linkUrl!.startsWith('twitch:');
+  String? get twitchVideoId => isTwitch ? linkUrl!.substring(7) : null;
   bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
   bool get isInstantVod {
     if (eventState != 'INSTANT_VOD') return false;
@@ -99,6 +105,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _countryFilter;
   bool _twoHourMode = true;
   bool _spoilerFree = true;
+
+  // Source-Toggles (identisch zur Web-App) — bestimmen welche Turniere im
+  // Dropdown gelistet werden. Alle drei standardmaessig aktiv, persistiert
+  // in FlutterSecureStorage unter 'source_vbw'/'source_laola'/'source_twitch'.
+  bool _sourceVbw = true;
+  bool _sourceLaola = true;
+  bool _sourceTwitch = true;
 
   final _storage = const FlutterSecureStorage();
   String _appVersion = '';
@@ -371,11 +384,63 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadSettings() async {
     final th = await _storage.read(key: 'two_hour_mode');
     final sf = await _storage.read(key: 'spoiler_free');
+    final sv = await _storage.read(key: 'source_vbw');
+    final sl = await _storage.read(key: 'source_laola');
+    final st = await _storage.read(key: 'source_twitch');
     if (mounted) {
       setState(() {
         _twoHourMode = th != 'false';
         _spoilerFree = sf != 'false';
+        _sourceVbw = sv != 'false';
+        _sourceLaola = sl != 'false';
+        _sourceTwitch = st != 'false';
       });
+    }
+  }
+
+  /// Ordnet einer Tournament-ID die Source-Kategorie zu — bestimmt vom
+  /// ID-Praefix / -Match analog zur Web-App. Die Zuordnung ist die Basis
+  /// fuer den Source-Toggle-Filter im Dropdown.
+  String _tournamentSource(String id) {
+    if (TwitchApi.isTwitchTournamentId(id)) return 'twitch';
+    if (id.startsWith('__laola_')) return 'laola';
+    return 'vbw';
+  }
+
+  /// Liste der Turniere die aktuell gemaess Source-Toggles im Dropdown
+  /// gezeigt werden sollen. "Alle Turniere" bleibt sichtbar wenn
+  /// mindestens eine Source aktiv ist.
+  List<Map<String, String>> _visibleTournaments() {
+    return _availableTournaments.where((t) {
+      final id = t['id'] ?? '';
+      if (id == _allId) return _sourceVbw || _sourceLaola || _sourceTwitch;
+      switch (_tournamentSource(id)) {
+        case 'twitch': return _sourceTwitch;
+        case 'laola':  return _sourceLaola;
+        default:       return _sourceVbw;
+      }
+    }).toList();
+  }
+
+  /// Handler fuer die drei Source-Toggle-Chips oben ueber dem Dropdown.
+  void _toggleSource(String src) {
+    setState(() {
+      switch (src) {
+        case 'vbw':    _sourceVbw    = !_sourceVbw;    break;
+        case 'laola':  _sourceLaola  = !_sourceLaola;  break;
+        case 'twitch': _sourceTwitch = !_sourceTwitch; break;
+      }
+    });
+    _storage.write(key: 'source_vbw',    value: _sourceVbw.toString());
+    _storage.write(key: 'source_laola',  value: _sourceLaola.toString());
+    _storage.write(key: 'source_twitch', value: _sourceTwitch.toString());
+    // Wenn das aktuell gewaehlte Turnier von der neuen Filter-Auswahl
+    // ausgeblendet wird, auf das erste sichtbare umschalten.
+    final visible = _visibleTournaments();
+    if (visible.isEmpty) return;
+    if (!visible.any((t) => t['id'] == _currentPlaylistId)) {
+      final newFirst = visible.first['id']!;
+      _loadVideos(newFirst);
     }
   }
 
@@ -1312,12 +1377,30 @@ class _HomeScreenState extends State<HomeScreen> {
       final laolaDynamicTournaments = await laolaDynamicF;
       final laolaTournaments = await laolaTournamentsF;
       final vbwBridgeTournaments = await vbwBridgeF;
+      // Twitch-GBT — Best-Effort. Wenn der GQL-Endpoint nicht antwortet
+      // oder keine GBT-Videos da sind, wird das Turnier weggelassen (der
+      // Service returned dann eine leere Liste).
+      final twitchVideos = await TwitchApi.fetchGbtVideos().catchError(
+          (Object _) => const <Map<String, dynamic>>[]);
+      final List<Map<String, String>> twitchTournaments = [];
+      if (twitchVideos.isNotEmpty) {
+        final latestDate = twitchVideos
+            .map((v) => (v['matchDate'] as String?) ?? '')
+            .where((d) => d.isNotEmpty)
+            .fold<String>('', (a, b) => b.compareTo(a) > 0 ? b : a);
+        twitchTournaments.add({
+          'id': TwitchApi.tournamentId,
+          'title': TwitchApi.tournamentTitle,
+          'matchDate': latestDate.isNotEmpty ? latestDate : '',
+        });
+      }
       final results = [
         ...realTournaments,
         ...youtubeTournaments,
         ...laolaDynamicTournaments,
         ...laolaTournaments,
         ...vbwBridgeTournaments,
+        ...twitchTournaments,
       ];
 
       // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
@@ -1857,10 +1940,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
 
     // Stale-while-revalidate: bei Cache-Hit sofort zeigen + im Hintergrund
-    // refreshen. Externe Quellen (YouTube/Laola) bringen eigenen Cache mit
-    // und sind hier ausgeschlossen.
-    final isExternalSource =
-        pid.startsWith('__yt_') || pid.startsWith('__laola_');
+    // refreshen. Externe Quellen (YouTube/Laola/Twitch) bringen eigenen
+    // Cache mit und sind hier ausgeschlossen.
+    final isExternalSource = pid.startsWith('__yt_') ||
+        pid.startsWith('__laola_') ||
+        TwitchApi.isTwitchTournamentId(pid);
     final cached = _videosCache[pid];
     if (!forceRefresh && !isExternalSource && cached != null) {
       if (mounted) {
@@ -1875,6 +1959,41 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
     try {
+      // Twitch-GBT: Videos kommen aus dem TwitchApi-GQL-Cache. Kein
+      // Merge mit VBW/Laola — die Twitch-Videos haben keine gender/round.
+      if (TwitchApi.isTwitchTournamentId(pid)) {
+        final entries = await TwitchApi.fetchGbtVideos(force: forceRefresh);
+        final videos = entries.map((e) {
+          final dateStr = (e['matchDate'] as String?) ?? '';
+          final duration = (e['duration'] is int)
+              ? (e['duration'] as int)
+              : int.tryParse(e['duration']?.toString() ?? '') ?? 0;
+          return VideoItem(
+            id: (e['id'] as String?) ?? '',
+            title: (e['title'] as String?) ?? '',
+            teams: (e['title'] as String?) ?? '',
+            gender: '',
+            round: '',
+            tournament: (e['tournament'] as String?) ?? TwitchApi.tournamentTitle,
+            thumbnailUrl: (e['thumbnail'] as String?) ?? '',
+            duration: duration,
+            matchDate: dateStr.isNotEmpty ? DateTime.tryParse(dateStr) : null,
+            eventState: (e['isLive'] == true) ? 'LIVE' : 'VOD_PUBLIC',
+            scheduledEnd: null,
+            // Praefix "twitch:" identifiziert Twitch-Videos in _openVideo
+            // ohne dass wir das Datenmodell aendern muessten.
+            linkUrl: 'twitch:${e['id']}',
+          );
+        }).toList();
+        if (_videosLoadEpoch == epoch && mounted) {
+          setState(() {
+            _videos = videos;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+        return;
+      }
       // Laola1-Turnier: Liste mit hardcoded URLs/Thumbnails, kein API-Call.
       if (pid.startsWith('__laola_')) {
         // Dynamische Laola-Liste (z.B. Tour Pro) – Cache wurde in
@@ -2102,6 +2221,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openVideo(VideoItem video) {
+    if (video.isTwitch) {
+      _openTwitchVideo(video);
+      return;
+    }
     if (video.isLaola) {
       Navigator.push(context, MaterialPageRoute(
         builder: (_) => LaolaStreamExtractor(
@@ -2120,6 +2243,64 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _launchPlayer(video, seekToLive: false);
+  }
+
+  /// Twitch-Videos: PlaybackAccessToken holen, usher.ttvnw.net-Master-URL
+  /// bauen und den nativen PlayerScreen oeffnen (video_player kann Twitchs
+  /// HLS-Streams direkt abspielen, kein Cookie-Proxy noetig).
+  Future<void> _openTwitchVideo(VideoItem video) async {
+    final vid = video.twitchVideoId;
+    if (vid == null) return;
+    // Kurzer nicht-cancelbarer Spinner waehrend der GQL-Roundtrip laeuft
+    // (~500ms). Kein separater Screen — wir bleiben visuell auf der
+    // Uebersicht bis die Master-URL da ist.
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const AlertDialog(
+        backgroundColor: Color(0xFF1A1A1A),
+        content: SizedBox(
+          height: 20,
+          child: Center(
+            child: CircularProgressIndicator(color: Colors.orange, strokeWidth: 2),
+          ),
+        ),
+      ),
+    ));
+    final url = await TwitchStream.extractMasterUrl(vid);
+    if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+    if (!mounted) return;
+    if (url == null) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          title: Text(S.isEn ? 'Stream unavailable' : 'Stream nicht verfuegbar',
+              style: const TextStyle(color: Colors.white)),
+          content: Text(
+            S.isEn
+                ? 'The Twitch playback token could not be fetched. Twitch may have changed their API.'
+                : 'Der Twitch-Playback-Token konnte nicht geholt werden. Vielleicht hat Twitch die API umgebaut.',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(S.isEn ? 'Back' : 'Zurueck',
+                  style: const TextStyle(color: Colors.orange)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.push(context, MaterialPageRoute(
+      builder: (_) => PlayerScreen(
+        title: video.teams,
+        streamUrl: url,
+      ),
+    ));
   }
 
   Future<void> _launchPlayer(VideoItem video, {required bool seekToLive}) async {
@@ -2618,6 +2799,36 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Source-Toggle-Chip (VBTV/Laola1/GBT). Optisch identisch zum
+  /// _filterChip, aber toggle-basiert statt Radio-Auswahl: aktiv = orange,
+  /// inaktiv = ausgegraut.
+  Widget _sourceChip(String label, String src) {
+    final selected = src == 'vbw'
+        ? _sourceVbw
+        : src == 'laola'
+            ? _sourceLaola
+            : src == 'twitch'
+                ? _sourceTwitch
+                : false;
+    return _TvFocusButton(
+      onPressed: () => _toggleSource(src),
+      borderRadius: 20,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? Colors.orange : const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? Colors.orange : Colors.white24),
+        ),
+        child: Text(label, style: TextStyle(
+          color: selected ? Colors.black : Colors.white38,
+          fontSize: 13,
+          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+        )),
+      ),
+    );
+  }
+
   Widget _tournamentDropdown() {
     if (_isLoadingTournaments) {
       return const SizedBox(
@@ -2625,13 +2836,14 @@ class _HomeScreenState extends State<HomeScreen> {
         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white38),
       );
     }
-    if (_availableTournaments.isEmpty) return const SizedBox.shrink();
+    final visible = _visibleTournaments();
+    if (visible.isEmpty) return const SizedBox.shrink();
 
     final isAll = _currentPlaylistId == _allId;
     final currentTitle = isAll
         ? S.allTournaments
-        : _availableTournaments
-            .firstWhere((t) => t['id'] == _currentPlaylistId, orElse: () => {'title': S.tournament})['title']!;
+        : visible.firstWhere((t) => t['id'] == _currentPlaylistId,
+            orElse: () => {'title': S.tournament})['title']!;
 
     Future<void> open() async {
       final result = await showModalBottomSheet<String>(
@@ -2641,7 +2853,7 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
         builder: (_) => _TournamentSheet(
-          tournaments: _availableTournaments,
+          tournaments: visible,
           currentId: _currentPlaylistId,
           allId: _allId,
         ),
@@ -2857,15 +3069,38 @@ class _HomeScreenState extends State<HomeScreen> {
           : Column(children: [
                   Container(
                     color: const Color(0xFF0A0A0A),
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                    // Source-Toggles VBTV/Laola1/GBT — analog zur Web-App.
+                    // Bestimmen welche Turniere im Dropdown drunter gelistet
+                    // werden. Chip-Style identisch zu den Gender-Filter-Chips
+                    // damit die Optik konsistent bleibt.
+                    child: Row(children: [
+                      _sourceChip('VBTV',   'vbw'),
+                      const SizedBox(width: 8),
+                      _sourceChip('Laola1', 'laola'),
+                      const SizedBox(width: 8),
+                      _sourceChip('GBT',    'twitch'),
+                    ]),
+                  ),
+                  Container(
+                    color: const Color(0xFF0A0A0A),
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                    // Turnier-Dropdown allein in eigener Zeile — vorher lag
+                    // er rechts neben den Gender-Chips, das war beim TV-
+                    // Fokus umstaendlich zu erreichen.
+                    child: Row(children: [
+                      _tournamentDropdown(),
+                    ]),
+                  ),
+                  Container(
+                    color: const Color(0xFF0A0A0A),
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                     child: Row(children: [
                       _filterChip(S.all, 'all', autofocus: true),
                       const SizedBox(width: 8),
                       _filterChip(S.men, 'men'),
                       const SizedBox(width: 8),
                       _filterChip(S.women, 'women'),
-                      const Spacer(),
-                      _tournamentDropdown(),
                     ]),
                   ),
                   if (_availablePlayers.isNotEmpty || _availableCountries.isNotEmpty)
