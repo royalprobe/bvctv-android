@@ -21,12 +21,18 @@ class LaolaLivestreamScraper {
       RegExp(r'/de/video/player/(\d+)/([a-z0-9][a-z0-9\-]*)/');
 
   /// Trennt im Slug: location-bezeichner -- (oder ---) court-bezeichner.
-  /// Beispiele die matchen:
-  ///   pro-masters-innsbruck---center-court
-  ///   win2day-pro-masters-poertschach---medaillen-entscheidung
-  ///   win2day-pro-masters-neusiedl--medaillen-entscheidung
+  /// Praefix vor "pro-masters-" ist bewusst NICHT verankert (kein `^`),
+  /// weil laola1.at den Slug ueber die Jahre mehrfach umgebaut hat:
+  ///   pro-masters-innsbruck---center-court               (2024)
+  ///   win2day-pro-masters-poertschach---medaillen-...    (2025)
+  ///   win2day-pro-masters-neusiedl--medaillen-...        (2025)
+  ///   win2day-beach-tour-pro-masters-wien---center-court (2026)
+  /// Mit `^` verankert wuerde das 2026er-Format NIE matchen ("beach-tour-"
+  /// steht zwischen "win2day-" und "pro-masters-") — genau das hat dazu
+  /// gefuehrt dass aktuell laufende Turniere (z.B. Wien) komplett aus der
+  /// Scraper-Ausbeute gefallen sind.
   static final RegExp _slugRe = RegExp(
-      r'^(?:win2day-)?pro-masters-([a-z0-9]+(?:-[a-z0-9]+)*?)-{2,3}(.+?)-?$');
+      r'(?:^|-)pro-masters-([a-z0-9]+(?:-[a-z0-9]+)*?)-{2,3}(.+?)-?$');
 
   /// Liefert eine Liste von Tournament-Maps in dem gleichen Format wie die
   /// hardcoded `_laolaTournamentData`-Tabelle in home_screen.dart, sodass
@@ -58,9 +64,11 @@ class LaolaLivestreamScraper {
   /// Public fuer Unit-Tests / lokales Debugging: parsed direkt aus einem
   /// HTML-String. Kein Netz, kein I/O.
   static List<Map<String, Object>> _parse(String html) {
-    // location -> list of {id, courtSlug}
-    final byLocation = <String, List<Map<String, String>>>{};
+    // laola1 listet pro Court mehrere Player-IDs (eine pro Tag/Session).
+    // Dedupe auf (location, courtSlug), hoechste ID gewinnt (juengste
+    // Session) — sonst erscheint z.B. "Court 2" mehrfach mit alten IDs.
     final seenIds = <String>{};
+    final byKey = <String, Map<String, String>>{}; // "location:court" -> entry
 
     for (final m in _playerRe.allMatches(html)) {
       final id = m.group(1)!;
@@ -73,10 +81,20 @@ class LaolaLivestreamScraper {
       seenIds.add(id);
       final location = s.group(1)!;
       final courtSlug = s.group(2)!;
-      byLocation.putIfAbsent(location, () => []).add({
-        'id': id,
-        'courtSlug': courtSlug,
-      });
+      final key = '$location:$courtSlug';
+      final existing = byKey[key];
+      if (existing == null || int.parse(id) > int.parse(existing['id']!)) {
+        // Original-Slug behalten (nicht neu zusammenbauen) — der Praefix
+        // variiert ("win2day-", "win2day-beach-tour-", ...) und die
+        // Player-URL braucht den ECHTEN Slug, sonst 404 bei laola1.at.
+        byKey[key] = {'id': id, 'slug': slug, 'courtSlug': courtSlug, 'location': location};
+      }
+    }
+
+    // location -> list of court-entries
+    final byLocation = <String, List<Map<String, String>>>{};
+    for (final e in byKey.values) {
+      byLocation.putIfAbsent(e['location']!, () => []).add(e);
     }
 
     final result = <Map<String, Object>>[];
@@ -97,8 +115,7 @@ class LaolaLivestreamScraper {
             .map((c) => <String, String>{
                   'id': c['id']!,
                   'title': _prettify(c['courtSlug']!),
-                  'url':
-                      'https://www.laola1.at/de/video/player/${c['id']}/${'win2day-pro-masters-$location---${c['courtSlug']}'}',
+                  'url': 'https://www.laola1.at/de/video/player/${c['id']}/${c['slug']}',
                   'thumbnail': '',
                 })
             .toList(),

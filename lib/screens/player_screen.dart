@@ -126,6 +126,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return KeyEventResult.ignored;
   }
 
+  /// Twitch (usher.ttvnw.net) verlangt KEIN Referer/Origin von laola1.at —
+  /// im Gegenteil, ein falscher Referer kann von Twitchs Edge-CDN als
+  /// verdaechtig eingestuft und mit 403 abgelehnt werden. Nur echte Laola-
+  /// Streams (Akamai) brauchen den Referer explizit, sonst 403 auf Master
+  /// UND Variants/Segmente.
+  bool get _isTwitchStream => widget.streamUrl.contains('ttvnw.net');
+
   /// Fetcht das Master-m3u8 selbst (über dart:io HttpClient damit wir Set-
   /// Cookie-Header lesen können), parsed die Variants, und gibt die beste
   /// (höchste Auflösung, sonst höchste Bitrate) zurück. Cookies aus der
@@ -138,8 +145,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
       try {
         final req = await client.getUrl(Uri.parse(masterUrl));
-        req.headers.set('Referer', 'https://www.laola1.at/');
-        req.headers.set('Origin', 'https://www.laola1.at');
+        if (!_isTwitchStream) {
+          req.headers.set('Referer', 'https://www.laola1.at/');
+          req.headers.set('Origin', 'https://www.laola1.at');
+        }
         req.headers.set('User-Agent',
             'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
         final res = await req.close().timeout(const Duration(seconds: 4));
@@ -194,8 +203,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final best = await _pickBestVariantWithCookies(widget.streamUrl);
     final playUrl = best?.url ?? widget.streamUrl;
     final headers = <String, String>{
-      'Referer': 'https://www.laola1.at/',
-      'Origin': 'https://www.laola1.at',
+      if (!_isTwitchStream) ...{
+        'Referer': 'https://www.laola1.at/',
+        'Origin': 'https://www.laola1.at',
+      },
       'User-Agent':
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
       if (best != null && best.cookieHeader.isNotEmpty)

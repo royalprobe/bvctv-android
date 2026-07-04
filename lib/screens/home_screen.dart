@@ -121,7 +121,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<VideoItem> get _allVideos {
     final liveIds = _liveVideos.map((v) => v.id).toSet();
-    return [..._liveVideos, ..._videos.where((v) => !liveIds.contains(v.id))];
+    final merged = [..._liveVideos, ..._videos.where((v) => !liveIds.contains(v.id))];
+    // Source-Filter: _liveVideos wird nur alle 60s neu befuellt
+    // (_loadLiveAndUpcoming) und kann bis dahin ein Twitch/Laola-Video
+    // enthalten das der User gerade per Source-Toggle ausgeblendet hat —
+    // ohne diesen Filter wuerde das Live-Banner z.B. ein GBT-Video zeigen
+    // obwohl der GBT-Toggle deaktiviert ist.
+    return merged.where((v) {
+      if (v.isTwitch) return _sourceTwitch;
+      if (v.isLaola) return _sourceLaola;
+      return _sourceVbw;
+    }).toList();
   }
 
   List<String> get _availableCountries {
@@ -1930,6 +1940,105 @@ class _HomeScreenState extends State<HomeScreen> {
     return (await Future.wait(futures)).whereType<VideoItem>().toList();
   }
 
+  /// Sammelt VideoItems aus ALLEN bekannten Laola-Turnieren (hardcoded
+  /// Fallback + gescrapte Live-Courts + dynamische Tour-Pro-Replay-Liste)
+  /// fuer die "Alle Turniere"-Aggregation. Best-effort: Fehler pro Turnier
+  /// werden verschluckt, ein kaputter Endpoint darf die restlichen
+  /// Quellen nicht mitreissen.
+  Future<List<VideoItem>> _allLaolaVideoItemsForAggregate() async {
+    final out = <VideoItem>[];
+
+    final liveTournaments = [..._laolaTournamentData, ..._scrapedLaolaTournaments];
+    for (final lt in liveTournaments) {
+      try {
+        final tournamentName = lt['tournament'] as String? ?? '';
+        final dateStr = lt['matchDate'] as String?;
+        final date = dateStr != null ? DateTime.tryParse(dateStr) : null;
+        final allEntries = (lt['videos'] as List).cast<Map<String, String>>();
+        final tid = lt['id'] as String;
+        final availability = _laolaAvailCache[tid] ??
+            await _fetchLaolaAvailability(allEntries.map((e) => e['id']!).toList());
+        _laolaAvailCache[tid] = availability;
+        for (final e in allEntries.where((e) => availability[e['id']] ?? true)) {
+          out.add(VideoItem(
+            id: e['id']!,
+            title: e['title']!,
+            teams: e['title']!,
+            gender: '',
+            round: '',
+            tournament: tournamentName,
+            thumbnailUrl: e['thumbnail'] ?? '',
+            duration: 0,
+            matchDate: date,
+            eventState: 'LIVE',
+            scheduledEnd: null,
+            linkUrl: e['url'],
+          ));
+        }
+      } catch (_) {}
+    }
+
+    for (final config in _laolaDynamicPlaylists) {
+      try {
+        final cid = config['id']!;
+        final data = _laolaListCache[cid] ?? await _fetchLaolaList(config);
+        if (data == null) continue;
+        _laolaListCache[cid] = data;
+        final tournamentName = data['title'] as String;
+        final entries = (data['entries'] as List).cast<Map<String, String>>();
+        for (final e in entries) {
+          final dateStr = e['date'] ?? '';
+          out.add(VideoItem(
+            id: e['videoId']!,
+            title: e['title']!,
+            teams: e['title']!,
+            gender: '',
+            round: '',
+            tournament: tournamentName,
+            thumbnailUrl: e['thumbnail'] ?? '',
+            duration: 0,
+            matchDate: dateStr.isNotEmpty ? DateTime.tryParse(dateStr) : null,
+            eventState: 'VOD_PUBLIC',
+            scheduledEnd: null,
+            linkUrl: e['url'],
+          ));
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  /// Wie oben, fuer Twitch/GBT — mappt TwitchApi.fetchGbtVideos() auf
+  /// VideoItem (gleiche Mapping-Logik wie im dedizierten Twitch-
+  /// Tournament-Branch in _loadVideos).
+  Future<List<VideoItem>> _allTwitchVideoItemsForAggregate() async {
+    try {
+      final entries = await TwitchApi.fetchGbtVideos();
+      return entries.map((e) {
+        final dateStr = (e['matchDate'] as String?) ?? '';
+        final duration = (e['duration'] is int)
+            ? (e['duration'] as int)
+            : int.tryParse(e['duration']?.toString() ?? '') ?? 0;
+        return VideoItem(
+          id: (e['id'] as String?) ?? '',
+          title: (e['title'] as String?) ?? '',
+          teams: (e['title'] as String?) ?? '',
+          gender: '',
+          round: '',
+          tournament: (e['tournament'] as String?) ?? TwitchApi.tournamentTitle,
+          thumbnailUrl: (e['thumbnail'] as String?) ?? '',
+          duration: duration,
+          matchDate: dateStr.isNotEmpty ? DateTime.tryParse(dateStr) : null,
+          eventState: (e['isLive'] == true) ? 'LIVE' : 'VOD_PUBLIC',
+          scheduledEnd: null,
+          linkUrl: 'twitch:${e['id']}',
+        );
+      }).toList();
+    } catch (_) {
+      return const <VideoItem>[];
+    }
+  }
+
   Future<void> _loadVideos([
     String? playlistId,
     bool silent = false,
@@ -2062,7 +2171,13 @@ class _HomeScreenState extends State<HomeScreen> {
               thumbnailUrl: e['thumbnail'] ?? '',
               duration: 0,
               matchDate: date,
-              eventState: 'VOD_PUBLIC',
+              // LIVE statt VOD_PUBLIC — availability kommt aus /access/hls
+              // und filtert bereits auf gerade laufende Courts, das sind
+              // also per Definition Live-Streams (kein Replay-Archiv wie
+              // bei der dynamischen Tour-Pro-Liste). Vorher war das hart
+              // auf VOD_PUBLIC gesetzt → isLive war nie true, kein
+              // LIVE-Badge auf der Kachel.
+              eventState: 'LIVE',
               scheduledEnd: null,
               linkUrl: e['url'],
             );
@@ -2150,27 +2265,50 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (pid == _allId) {
         final ctx = _buildCtx();
-        final playlistFutures = _availableTournaments
-            .where((t) => !t['id']!.startsWith('__'))
-            .map((t) async {
-          try {
-            final res = await http.get(
-              Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/${t['id']}?overrideFeedType=moreinfo&ctx=$ctx'),
-              headers: {'Origin': 'https://tv.volleyballworld.com'},
-            ).timeout(const Duration(seconds: 10));
-            if (res.statusCode == 200) {
-              final data = jsonDecode(res.body);
-              return (data['entry'] as List? ?? []).map(_itemFromJson).toList();
-            }
-          } catch (_) {}
-          return <VideoItem>[];
-        });
-        final vtFutures = _virtualTournamentData.map(_loadVirtualTournament);
-        final allResults = await Future.wait([...playlistFutures, ...vtFutures]);
+        // VBW-Playlists + Bridge-Virtual-Tournaments nur wenn der VBTV-
+        // Toggle aktiv ist — sonst leaken VBW-Videos in "Alle Turniere"
+        // rein obwohl der User nur Laola1/GBT sehen will.
+        final Iterable<Future<List<VideoItem>>> playlistFutures = _sourceVbw
+            ? _availableTournaments
+                .where((t) => !t['id']!.startsWith('__'))
+                .map<Future<List<VideoItem>>>((t) async {
+                  try {
+                    final res = await http.get(
+                      Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/${t['id']}?overrideFeedType=moreinfo&ctx=$ctx'),
+                      headers: {'Origin': 'https://tv.volleyballworld.com'},
+                    ).timeout(const Duration(seconds: 10));
+                    if (res.statusCode == 200) {
+                      final data = jsonDecode(res.body);
+                      return (data['entry'] as List? ?? []).map(_itemFromJson).toList();
+                    }
+                  } catch (_) {}
+                  return <VideoItem>[];
+                })
+            : const <Future<List<VideoItem>>>[];
+        final Iterable<Future<List<VideoItem>>> vtFutures = _sourceVbw
+            ? _virtualTournamentData.map(_loadVirtualTournament)
+            : const <Future<List<VideoItem>>>[];
+        // Laola: gescrapte Live-Courts + hardcoded Fallback + dynamische
+        // Tour-Pro-Replay-Liste — nur wenn Laola1-Toggle aktiv.
+        final laolaFuture = _sourceLaola
+            ? _allLaolaVideoItemsForAggregate()
+            : Future.value(const <VideoItem>[]);
+        // Twitch/GBT — nur wenn Toggle aktiv.
+        final twitchFuture = _sourceTwitch
+            ? _allTwitchVideoItemsForAggregate()
+            : Future.value(const <VideoItem>[]);
+
+        final allResults = await Future.wait([
+          ...playlistFutures,
+          ...vtFutures,
+          laolaFuture,
+          twitchFuture,
+        ]);
         final all = allResults.expand((l) => l).toList();
         final seen = <String>{};
         final unique = all.where((v) => seen.add(v.id)).toList()
           ..sort((a, b) {
+            if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
             if (a.matchDate == null) return 1;
             if (b.matchDate == null) return -1;
             return b.matchDate!.compareTo(a.matchDate!);
