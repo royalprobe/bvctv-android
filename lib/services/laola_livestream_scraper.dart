@@ -63,12 +63,19 @@ class LaolaLivestreamScraper {
 
   /// Public fuer Unit-Tests / lokales Debugging: parsed direkt aus einem
   /// HTML-String. Kein Netz, kein I/O.
+  ///
+  /// WICHTIG: dedupe NICHT auf eine ID pro (location, courtSlug) — laola1
+  /// vergibt pro Court mehrere Player-IDs im Tagesverlauf (eine pro Match-
+  /// Session), und die hoechste ID ist NICHT zuverlaessig die gerade live
+  /// laufende (kann auch ein spaeteres, noch nicht gestartetes Match sein).
+  /// Wir liefern ALLE Kandidaten-IDs pro Court zurueck; der Caller
+  /// (home_screen.dart::_scrapeLaolaLivestreams) prueft alle Kandidaten
+  /// gegen /access/hls und behaelt nur den tatsaechlich live-Kandidaten
+  /// pro Court.
   static List<Map<String, Object>> _parse(String html) {
-    // laola1 listet pro Court mehrere Player-IDs (eine pro Tag/Session).
-    // Dedupe auf (location, courtSlug), hoechste ID gewinnt (juengste
-    // Session) — sonst erscheint z.B. "Court 2" mehrfach mit alten IDs.
     final seenIds = <String>{};
-    final byKey = <String, Map<String, String>>{}; // "location:court" -> entry
+    // "location:court" -> Liste aller Kandidaten-Videos fuer diesen Court
+    final byKey = <String, List<Map<String, String>>>{};
 
     for (final m in _playerRe.allMatches(html)) {
       final id = m.group(1)!;
@@ -82,19 +89,22 @@ class LaolaLivestreamScraper {
       final location = s.group(1)!;
       final courtSlug = s.group(2)!;
       final key = '$location:$courtSlug';
-      final existing = byKey[key];
-      if (existing == null || int.parse(id) > int.parse(existing['id']!)) {
-        // Original-Slug behalten (nicht neu zusammenbauen) — der Praefix
-        // variiert ("win2day-", "win2day-beach-tour-", ...) und die
-        // Player-URL braucht den ECHTEN Slug, sonst 404 bei laola1.at.
-        byKey[key] = {'id': id, 'slug': slug, 'courtSlug': courtSlug, 'location': location};
-      }
+      // Original-Slug behalten (nicht neu zusammenbauen) — der Praefix
+      // variiert ("win2day-", "win2day-beach-tour-", ...) und die
+      // Player-URL braucht den ECHTEN Slug, sonst 404 bei laola1.at.
+      byKey.putIfAbsent(key, () => []).add({
+        'id': id,
+        'title': _prettify(courtSlug),
+        'url': 'https://www.laola1.at/de/video/player/$id/$slug',
+        'thumbnail': '',
+        'location': location,
+      });
     }
 
-    // location -> list of court-entries
     final byLocation = <String, List<Map<String, String>>>{};
-    for (final e in byKey.values) {
-      byLocation.putIfAbsent(e['location']!, () => []).add(e);
+    for (final candidates in byKey.values) {
+      final location = candidates.first['location']!;
+      byLocation.putIfAbsent(location, () => []).addAll(candidates);
     }
 
     final result = <Map<String, Object>>[];
@@ -104,19 +114,20 @@ class LaolaLivestreamScraper {
 
     for (final entry in byLocation.entries) {
       final location = entry.key;
-      final courts = entry.value;
       final locationDisplay = _prettify(location);
       result.add({
         'id': '__laola_scraped_${location}_$yearStr',
         'title': 'Pro Masters $locationDisplay $yearStr',
         'matchDate': today,
         'tournament': 'win2day PRO MASTERS $locationDisplay',
-        'videos': courts
+        // Mehrere Kandidaten pro Court moeglich — Caller reduziert per
+        // Live-Check auf einen Treffer pro Court (siehe Doc oben).
+        'videos': entry.value
             .map((c) => <String, String>{
                   'id': c['id']!,
-                  'title': _prettify(c['courtSlug']!),
-                  'url': 'https://www.laola1.at/de/video/player/${c['id']}/${c['slug']}',
-                  'thumbnail': '',
+                  'title': c['title']!,
+                  'url': c['url']!,
+                  'thumbnail': c['thumbnail']!,
                 })
             .toList(),
       });
