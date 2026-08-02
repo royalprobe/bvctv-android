@@ -20,19 +20,24 @@ class LaolaLivestreamScraper {
   static final RegExp _playerRe =
       RegExp(r'/de/video/player/(\d+)/([a-z0-9][a-z0-9\-]*)/');
 
-  /// Trennt im Slug: location-bezeichner -- (oder ---) court-bezeichner.
-  /// Praefix vor "pro-masters-" ist bewusst NICHT verankert (kein `^`),
+  /// Trennt im Slug: serie, location-bezeichner -- (oder ---) court.
+  /// Praefix vor `pro-<serie>-` ist bewusst NICHT verankert (kein `^`),
   /// weil laola1.at den Slug ueber die Jahre mehrfach umgebaut hat:
   ///   pro-masters-innsbruck---center-court               (2024)
   ///   win2day-pro-masters-poertschach---medaillen-...    (2025)
   ///   win2day-pro-masters-neusiedl--medaillen-...        (2025)
   ///   win2day-beach-tour-pro-masters-wien---center-court (2026)
+  ///   win2day-beach-tour-pro-open-tulln--center-court    (2026)
   /// Mit `^` verankert wuerde das 2026er-Format NIE matchen ("beach-tour-"
-  /// steht zwischen "win2day-" und "pro-masters-") — genau das hat dazu
-  /// gefuehrt dass aktuell laufende Turniere (z.B. Wien) komplett aus der
-  /// Scraper-Ausbeute gefallen sind.
+  /// steht zwischen "win2day-" und "pro-masters-").
+  ///
+  /// Die Serie ist ebenfalls NICHT auf "masters" fixiert: die win2day Beach
+  /// Tour faehrt mehrere Serien parallel (PRO MASTERS, PRO OPEN, PRO TOUR).
+  /// Ein hartes "pro-masters-" hat die komplette PRO-OPEN-Schiene (z.B.
+  /// Tulln) aus der Scraper-Ausbeute fallen lassen.
+  /// Gruppe 1 = Serie, Gruppe 2 = Location, Gruppe 3 = Court.
   static final RegExp _slugRe = RegExp(
-      r'(?:^|-)pro-masters-([a-z0-9]+(?:-[a-z0-9]+)*?)-{2,3}(.+?)-?$');
+      r'(?:^|-)pro-(masters|open|tour)-([a-z0-9]+(?:-[a-z0-9]+)*?)-{2,3}(.+?)-?$');
 
   /// Liefert eine Liste von Tournament-Maps in dem gleichen Format wie die
   /// hardcoded `_laolaTournamentData`-Tabelle in home_screen.dart, sodass
@@ -74,21 +79,24 @@ class LaolaLivestreamScraper {
   /// pro Court.
   static List<Map<String, Object>> _parse(String html) {
     final seenIds = <String>{};
-    // "location:court" -> Liste aller Kandidaten-Videos fuer diesen Court
+    // "serie:location:court" -> alle Kandidaten-Videos fuer diesen Court
     final byKey = <String, List<Map<String, String>>>{};
 
     for (final m in _playerRe.allMatches(html)) {
       final id = m.group(1)!;
       final slug = m.group(2)!;
       if (seenIds.contains(id)) continue;
-      // Nur Beach-Turniere: Slug muss `pro-masters-<location>` enthalten.
+      // Nur Beach-Turniere: Slug muss `pro-<serie>-<location>` enthalten.
       // (Andere Sportarten wie Kickboxen oder LAOLA1 TV erfuellen das nicht.)
       final s = _slugRe.firstMatch(slug);
       if (s == null) continue;
       seenIds.add(id);
-      final location = s.group(1)!;
-      final courtSlug = s.group(2)!;
-      final key = '$location:$courtSlug';
+      final series = s.group(1)!;
+      final location = s.group(2)!;
+      final courtSlug = s.group(3)!;
+      // Serie gehoert in den Key: PRO MASTERS und PRO OPEN koennen am selben
+      // Ort stattfinden und sind trotzdem verschiedene Turniere.
+      final key = '$series:$location:$courtSlug';
       // Original-Slug behalten (nicht neu zusammenbauen) — der Praefix
       // variiert ("win2day-", "win2day-beach-tour-", ...) und die
       // Player-URL braucht den ECHTEN Slug, sonst 404 bei laola1.at.
@@ -97,14 +105,17 @@ class LaolaLivestreamScraper {
         'title': _prettify(courtSlug),
         'url': 'https://www.laola1.at/de/video/player/$id/$slug',
         'thumbnail': '',
+        'series': series,
         'location': location,
       });
     }
 
-    final byLocation = <String, List<Map<String, String>>>{};
+    // Ein Tournament-Eintrag pro (Serie, Location).
+    final byTournament = <String, List<Map<String, String>>>{};
     for (final candidates in byKey.values) {
-      final location = candidates.first['location']!;
-      byLocation.putIfAbsent(location, () => []).addAll(candidates);
+      final c = candidates.first;
+      final tKey = '${c['series']}:${c['location']}';
+      byTournament.putIfAbsent(tKey, () => []).addAll(candidates);
     }
 
     final result = <Map<String, Object>>[];
@@ -112,14 +123,17 @@ class LaolaLivestreamScraper {
     final today =
         '$yearStr-${_pad(DateTime.now().month)}-${_pad(DateTime.now().day)}';
 
-    for (final entry in byLocation.entries) {
-      final location = entry.key;
+    for (final entry in byTournament.entries) {
+      final series = entry.value.first['series']!;
+      final location = entry.value.first['location']!;
       final locationDisplay = _prettify(location);
+      final seriesDisplay = _prettify(series);
       result.add({
-        'id': '__laola_scraped_${location}_$yearStr',
-        'title': 'Pro Masters $locationDisplay $yearStr',
+        'id': '__laola_scraped_${series}_${location}_$yearStr',
+        'title': 'Pro $seriesDisplay $locationDisplay $yearStr',
         'matchDate': today,
-        'tournament': 'win2day PRO MASTERS $locationDisplay',
+        'tournament':
+            'win2day PRO ${series.toUpperCase()} $locationDisplay',
         // Mehrere Kandidaten pro Court moeglich — Caller reduziert per
         // Live-Check auf einen Treffer pro Court (siehe Doc oben).
         'videos': entry.value
