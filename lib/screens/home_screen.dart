@@ -279,6 +279,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _scrapedLaolaTournaments = deduped;
     if (deduped.isEmpty) return;
 
+    // Die Aggregat-Ansicht ("Alle Turniere") zieht ihre Laola-Items aus
+    // _scrapedLaolaTournaments — die war beim App-Start aber noch leer, weil
+    // der Scrape erst 8s spaeter laeuft, und das Ergebnis liegt seitdem in
+    // _videosCache. Ohne Invalidierung + Reload bleibt ein gerade gestartetes
+    // Laola-Turnier bis zum naechsten manuellen Refresh unsichtbar, obwohl
+    // der Scraper es laengst gefunden hat.
+    _videosCache.remove(_allId);
+    if (_currentPlaylistId == _allId && _sourceLaola) {
+      _loadVideos(null, true, true);
+    }
+
     // Tournament-Liste fuer den User aktualisieren — bestehende Eintraege
     // bleiben, gescrapte werden vorne eingefuegt (= aktuellste Spieltage
     // oben). Aktuell ausgewaehltes Tournament wird NICHT umgeschaltet.
@@ -584,7 +595,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!mounted) return;
     if (liveItems.isNotEmpty) {
-      setState(() => _liveVideos = liveItems);
+      // liveItems stammt ausschliesslich aus VBW-Quellen — Laola/Twitch sind
+      // oben per toCheck-Filter ausgeschlossen. Ein blosses Ersetzen wuerde
+      // laufende Laola-/GBT-Streams aus dem Live-Banner werfen, sobald
+      // irgendein VBW-Turnier live geht. Externe Live-Items aus der aktuellen
+      // Ansicht deshalb behalten.
+      final vbwIds = liveItems.map((v) => v.id).toSet();
+      final externalLive = liveInView.where(
+          (v) => (v.isLaola || v.isTwitch) && !vbwIds.contains(v.id));
+      setState(() => _liveVideos = [...liveItems, ...externalLive]);
     } else if (successCount > 0 && liveInView.isEmpty) {
       // API confirmed no live games and current view also has none → clear
       setState(() => _liveVideos = []);
