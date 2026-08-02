@@ -502,8 +502,24 @@ class _HomeScreenState extends State<HomeScreen> {
         // event_state nötig, der gecachte VideoItem-Stand kann veraltet sein.
         if (id.startsWith('__vbw_')) {
           final ci = id.substring('__vbw_'.length);
-          final mediaIds =
-              _vbwBridgeItems[ci]?.map((v) => v.id).toList() ?? const <String>[];
+          // NICHT alle Bridge-Items pruefen: seit die Bridge auch den
+          // "Latest Replays"-Feed liest, haengen an einem laufenden Turnier
+          // ueber 100 Media-IDs — die alle im 60s-Takt einzeln abzufragen
+          // wuerde den Fire Stick fluten. Ein abgeschlossenes Replay kann
+          // ohnehin nicht mehr live gehen, also bleiben nur Items im
+          // Zeitfenster um ihren Anpfiff uebrig.
+          final now = DateTime.now().toUtc();
+          final mediaIds = (_vbwBridgeItems[ci] ?? const <VideoItem>[])
+              .where((v) {
+                if (v.isLive) return true;
+                if (v.eventState == 'VOD_PUBLIC') return false;
+                final d = v.matchDate?.toUtc();
+                if (d == null) return false;
+                return now.isAfter(d.subtract(const Duration(minutes: 30))) &&
+                    now.isBefore(d.add(const Duration(hours: 6)));
+              })
+              .map((v) => v.id)
+              .toList();
           if (mediaIds.isEmpty) return;
           int localSuccess = 0;
           final entries = await Future.wait(mediaIds.map((mid) async {
@@ -1521,6 +1537,25 @@ class _HomeScreenState extends State<HomeScreen> {
   // vom Bridge-Filter ignoriert.
   static const Set<String> _beachChannelGroupIds = {'aBT42rPR', 'rkwGm18m'};
 
+  /// Zusaetzliche VBW-Feeds fuer den Bridge-Scrape. Sie haengen NICHT in den
+  /// Channel-Group-playlists, sind aber auf
+  /// https://tv.volleyballworld.com/competition-groups/aBT42rPR verlinkt.
+  ///
+  /// Warum die noetig sind: VBW legt die Turnier-Playlist ("Rio de Janeiro I
+  /// Elite I 2026") erst NACH dem Turnier an. Solange es laeuft, stehen die
+  /// bereits gespielten Matches ausschliesslich in "Latest Replays" — die
+  /// Homepage zeigt nur kommende Spiele. Ohne diese Feeds war ein laufendes
+  /// Turnier in der App komplett leer.
+  static const List<String> _vbwExtraFeeds = [
+    'jyMbcJFi', // Latest Replays — VOD_PUBLIC/INSTANT_VOD, alle Sportarten
+    'BqFYBy9b', // Beach Pro Tour — PRE_LIVE/LIVE, nur Beach
+  ];
+
+  /// Der Endpoint liefert ohne page_limit nur 10 Entries. 300 deckt ein
+  /// komplettes Elite-Turnier (~120 Matches) plus Nachbarturniere ab und
+  /// kostet ~650 KB; 500 waere 1 MB fuer neun weitere Matches.
+  static const int _vbwExtraFeedLimit = 300;
+
   // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
   // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
   // gelesen. So bleiben die Listen auch nach Neustart aktuell.
@@ -1617,25 +1652,64 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<List<Map<String, String>>> _fetchVbwBridgeTournaments(
       Set<String> knownPlaylistIds, Set<String> knownCompetitionItems) async {
     try {
+      // Alle gefundenen Entries, dedupliziert ueber die Media-ID. Gespeist aus
+      // zwei Quellen: Homepage-Scrape (unten) und den Extra-Feeds.
+      final entriesById = <String, Map<String, dynamic>>{};
+
+      // ── Quelle 1: Extra-Feeds ────────────────────────────────────────────
+      // Diese Feeds liefern Entries INKLUSIVE competition_group_item und
+      // competition_item — ein Request statt hunderter /jw/media-Aufrufe.
+      // Ohne sie fehlen die bereits gespielten Matches eines LAUFENDEN
+      // Turniers komplett: VBW legt die Turnier-Playlist ("Rio de Janeiro I
+      // Elite I 2026") erst NACH dem Turnier an, und die Homepage zeigt nur
+      // das Upcoming-Karussell.
+      await Future.wait(_vbwExtraFeeds.map((fid) async {
+        try {
+          final res = await http.get(
+            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/'
+                '$fid?page_limit=$_vbwExtraFeedLimit'),
+            headers: {'Origin': 'https://tv.volleyballworld.com'},
+          ).timeout(const Duration(seconds: 12));
+          if (res.statusCode != 200) return;
+          final list = jsonDecode(res.body)['entry'] as List? ?? [];
+          for (final raw in list) {
+            if (raw is! Map<String, dynamic>) continue;
+            final ext = raw['extensions'] as Map<String, dynamic>? ?? {};
+            // Beach-Filter: "Latest Replays" mischt VNL/Halle mit rein.
+            if (!_beachChannelGroupIds
+                .contains(ext['competition_group_item'])) {
+              continue;
+            }
+            final mid = raw['id'] as String?;
+            if (mid == null || ext['competition_item'] == null) continue;
+            entriesById[mid] = raw;
+          }
+        } catch (_) {}
+      }));
+
+      // ── Quelle 2: Homepage-Scrape ────────────────────────────────────────
+      // Faengt Items ab, die (noch) in keinem der Extra-Feeds stehen.
+      // Darf fehlschlagen ohne die Feed-Ausbeute mitzureissen.
       final homeRes = await http.get(
         Uri.parse('https://tv.volleyballworld.com/'),
         headers: {'User-Agent': 'Mozilla/5.0'},
-      ).timeout(const Duration(seconds: 8));
-      if (homeRes.statusCode != 200) return [];
+      ).timeout(const Duration(seconds: 8)).catchError(
+          (_) => http.Response('', 599));
       // VBW nutzt zwei Link-Formate auf der Homepage:
       //   altes: jw%2Fmedia%2F<id>?... (URL-encoded self-link)
       //   neues: /media/<id>?disablePlayNext=... (Klar-Pfad, seit ~Mai 2026)
       // Poster-URLs (/media/<id>/poster.jpg) dürfen NICHT matchen — Anker auf
       // "?disablePlayNext" verhindert das.
-      final ids = <String>{
-        ...RegExp(r'jw%2Fmedia%2F([A-Za-z0-9]+)')
-            .allMatches(homeRes.body)
-            .map((m) => m.group(1)!),
-        ...RegExp(r'/media/([A-Za-z0-9]+)\?disablePlayNext')
-            .allMatches(homeRes.body)
-            .map((m) => m.group(1)!),
-      }.toList();
-      if (ids.isEmpty) return [];
+      final ids = homeRes.statusCode != 200
+          ? const <String>[]
+          : <String>{
+              ...RegExp(r'jw%2Fmedia%2F([A-Za-z0-9]+)')
+                  .allMatches(homeRes.body)
+                  .map((m) => m.group(1)!),
+              ...RegExp(r'/media/([A-Za-z0-9]+)\?disablePlayNext')
+                  .allMatches(homeRes.body)
+                  .map((m) => m.group(1)!),
+            }.where((id) => !entriesById.containsKey(id)).toList();
 
       // Metadata pro ID parallel holen — wir behalten das ganze Entry damit
       // _itemFromJson direkt VideoItems daraus baut. Limit 4s pro Request.
@@ -1666,14 +1740,22 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }));
 
+      for (final m in metas) {
+        if (m == null) continue;
+        final entry = m['entry'] as Map<String, dynamic>;
+        final mid = entry['id'] as String?;
+        if (mid != null) entriesById[mid] = entry;
+      }
+
       // Gruppieren nach competition_item — wir cachen ALLE ci's (auch die mit
       // bekannter Playlist), damit _loadVideos sie in die offizielle Playlist
       // mergen kann. Nur die Turnier-Auflistung filtert orphans.
       final groups = <String, List<Map<String, dynamic>>>{};
-      for (final m in metas) {
-        if (m == null) continue;
-        final ci = m['ci'] as String;
-        groups.putIfAbsent(ci, () => []).add(m['entry'] as Map<String, dynamic>);
+      for (final entry in entriesById.values) {
+        final ci = (entry['extensions'] as Map<String, dynamic>?)?['competition_item']
+            as String?;
+        if (ci == null) continue;
+        groups.putIfAbsent(ci, () => []).add(entry);
       }
       if (groups.isEmpty) return [];
 
@@ -1687,10 +1769,17 @@ class _HomeScreenState extends State<HomeScreen> {
       // offizielle Playlist abgedeckt sind. knownPlaylistIds enthält die
       // Playlist-IDs aus der Channel Group; knownCompetitionItems enthält die
       // ci's der bereits geladenen Playlists (extrahiert in fetchTitle).
-      final orphanCis = groups.entries
-          .where((e) =>
-              !knownPlaylistIds.contains(e.key) &&
-              !knownCompetitionItems.contains(e.key));
+      //
+      // Zusaetzlich muss mindestens EIN Item tatsaechlich abspielbar sein.
+      // _filteredVideos blendet reine Zukunfts-Matches aus (v.isLive ||
+      // !v.isUpcoming) — ein Turnier das ausschliesslich aus angesetzten
+      // Spielen besteht (z.B. Hamburg mit Anpfiff in vier Tagen) waere sonst
+      // ein Dropdown-Eintrag, der garantiert eine leere Liste zeigt.
+      final orphanCis = groups.entries.where((e) =>
+          !knownPlaylistIds.contains(e.key) &&
+          !knownCompetitionItems.contains(e.key) &&
+          (_vbwBridgeItems[e.key] ?? const <VideoItem>[])
+              .any((v) => v.isLive || !v.isUpcoming));
 
       final result = await Future.wait(orphanCis.map((entry) async {
         final ci = entry.key;
