@@ -1421,6 +1421,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Requests, und das aktuellste Turnier kommt sogar aus der Bridge).
       // Bis dahin bleibt _isLoading true und der Ladescreen stehen.
 
+      // EIN Client fuer alle Titel-Requests, damit die Verbindungen
+      // wiederverwendet werden (siehe Begruendung in fetchTitle).
+      final titleClient = http.Client();
+
       // Titel + match_date + competition_item des neuesten Items holen –
       // 3072 Bytes reichen sicher (match_date liegt bei ~1900-2000 Bytes;
       // TCP-Burst sendet ~14KB auf einmal, daher keine Ladezeit-Erhöhung
@@ -1429,19 +1433,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // nicht in die offizielle Playlist gehängt hat.
       Future<Map<String, String>?> fetchTitle(String id) async {
         try {
-          final client = http.Client();
-          final req = http.Request('GET',
-              Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id'));
-          req.headers['Origin'] = 'https://tv.volleyballworld.com';
-          final streamed = await client.send(req).timeout(const Duration(seconds: 8));
-          if (streamed.statusCode != 200) { client.close(); return null; }
-          final buf = StringBuffer();
-          await for (final chunk in streamed.stream) {
-            buf.write(utf8.decode(chunk, allowMalformed: true));
-            if (buf.length >= 3072) break;
-          }
-          client.close();
-          final raw = buf.toString();
+          // Per Range-Header genau die ersten 3 KB holen. Der Endpoint
+          // antwortet mit 206 (Accept-Ranges: bytes), eine Playlist ist sonst
+          // ~270 KB gross.
+          //
+          // Vorher wurde der Response gestreamt und nach 3072 Bytes einfach
+          // abgebrochen. Das liefert zwar auch nur 3 KB, macht die Verbindung
+          // aber unbrauchbar — zusammen mit dem client-per-Request bedeutete
+          // das 27 TCP+TLS-Handshakes auf einem Fire Stick. Gemessen waren die
+          // Titel-Requests mit 3,8s der dominierende Posten der Startzeit.
+          // Mit vollstaendig gelesenem Response plus gemeinsamem Client
+          // bleiben die Verbindungen am Leben und werden wiederverwendet.
+          final res = await titleClient.get(
+            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id'),
+            headers: const {
+              'Origin': 'https://tv.volleyballworld.com',
+              'Range': 'bytes=0-3071',
+            },
+          ).timeout(const Duration(seconds: 8));
+          // 206 = Range akzeptiert, 200 = Server ignoriert ihn (dann halt ganz).
+          if (res.statusCode != 206 && res.statusCode != 200) return null;
+          final raw = res.body;
           final m = RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(raw);
           if (m == null) return null;
           final title = jsonDecode('"${m.group(1)}"') as String;
@@ -1506,6 +1518,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               (Object _) => const <Map<String, dynamic>>[]);
 
       final realTournaments = await realTournamentsF;
+      titleClient.close();
       _mark('titel-requests (${realTournaments.length})');
       final youtubeTournaments = await youtubeTournamentsF;
       _mark('youtube-feeds');
