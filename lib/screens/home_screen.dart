@@ -2018,6 +2018,15 @@ class _HomeScreenState extends State<HomeScreen> {
     bool forceRefresh = false,
   ]) async {
     final pid = playlistId ?? _currentPlaylistId;
+    // Jeder explizite Ladevorgang macht die noch laufenden ungueltig. Ohne das
+    // hier wurde die Epoche NUR in _loadTournamentList erhoeht, ein
+    // Turnierwechsel also nie: ein langsamer Ladevorgang (die Aggregation holt
+    // ueber 20 Playlists) lief nach dem Wechsel weiter und schrieb am Ende
+    // seine Videos in die Liste — der User sah die Videos des Turniers, das er
+    // gerade verlassen hatte. Stille Hintergrund-Refreshes zaehlen NICHT hoch,
+    // sie duerfen eine Nutzer-Auswahl nicht verdraengen (und werden umgekehrt
+    // von ihr verdraengt, weil ihre Epoche dann veraltet ist).
+    if (!silent) _videosLoadEpoch++;
     final epoch = _videosLoadEpoch;
     if (playlistId != null && mounted) setState(() { _currentPlaylistId = pid; });
 
