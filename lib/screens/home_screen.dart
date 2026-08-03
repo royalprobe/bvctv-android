@@ -1362,7 +1362,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return title;
   }
 
+  /// Startzeit-Instrumentierung. Der Startpfad besteht aus mehreren parallelen
+  /// Netzwerk-Bloecken; ohne Zeitstempel ist nicht erkennbar, welcher davon
+  /// den kritischen Pfad bestimmt. debugPrint ist billig und die Zeilen
+  /// erscheinen in `adb logcat -s flutter`.
+  final Stopwatch _startupWatch = Stopwatch();
+  void _mark(String what) =>
+      debugPrint('[startup] ${_startupWatch.elapsedMilliseconds}ms  $what');
+
   Future<void> _loadTournamentList() async {
+    _startupWatch.start();
     try {
       // Beide Competition Groups PARALLEL fetchen (war vorher sequential)
       final cgPlaylistIds = <String>[];
@@ -1399,6 +1408,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         return;
       }
+
+      _mark('competition groups (${cgPlaylistIds.length} playlists)');
 
       // BEWUSST kein Vorab-Laden der ersten Playlist. Das gab es hier mal
       // ("erste Playlist SOFORT laden, ohne auf die Titel aller anderen zu
@@ -1495,15 +1506,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               (Object _) => const <Map<String, dynamic>>[]);
 
       final realTournaments = await realTournamentsF;
+      _mark('titel-requests (${realTournaments.length})');
       final youtubeTournaments = await youtubeTournamentsF;
+      _mark('youtube-feeds');
       final laolaDynamicTournaments = await laolaDynamicF;
+      _mark('laola-listen');
+      final bridgeGroups = await vbwBridgeGroupsF;
+      _mark('bridge phase 1 (${bridgeGroups.length} competition items)');
       // Phase 2: jetzt ist das ci-Set der offiziellen Playlists bekannt.
       final vbwBridgeTournaments = await _buildVbwBridgeTournaments(
-        await vbwBridgeGroupsF,
+        bridgeGroups,
         cgPlaylistIds.toSet(),
         realTournaments.map((m) => m['ci']).whereType<String>().toSet(),
       );
+      _mark('bridge phase 2 (${vbwBridgeTournaments.length} turniere)');
       final twitchVideos = await twitchVideosF;
+      _mark('twitch');
       final List<Map<String, String>> twitchTournaments = [];
       if (twitchVideos.isNotEmpty) {
         final latestDate = twitchVideos
@@ -2477,6 +2495,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _videosCache[pid] = videos;
         if (_videosLoadEpoch != epoch) return;
         setState(() => _videos = videos);
+        if (_startupWatch.isRunning) {
+          _mark('erste Videoliste sichtbar (${videos.length} videos)');
+          _startupWatch.stop();
+        }
       } else {
         if (_videosLoadEpoch == epoch) setState(() => _errorMessage = S.httpError(response.statusCode));
       }
