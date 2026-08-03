@@ -1494,6 +1494,11 @@ class _HomeScreenState extends State<HomeScreen> {
             (_vbwBridgeItems[currentCi]?.isNotEmpty ?? false);
         final needsReload =
             newFirst != _currentPlaylistId || hasNewBridgeExtras;
+        // "Alle Turniere" kann berechnet und gecached worden sein, bevor der
+        // Bridge-Scrape fertig war — dann fehlen ihr genau die Videos des
+        // laufenden Turniers. Cache verwerfen, damit sie beim naechsten
+        // Oeffnen frisch gebaut wird.
+        if (_vbwBridgeItems.isNotEmpty) _videosCache.remove(_allId);
         setState(() {
           _availableTournaments = results;
           _currentPlaylistId = newFirst;
@@ -2415,6 +2420,16 @@ class _HomeScreenState extends State<HomeScreen> {
         final Iterable<Future<List<VideoItem>>> vtFutures = _sourceVbw
             ? _virtualTournamentData.map(_loadVirtualTournament)
             : const <Future<List<VideoItem>>>[];
+        // VBW-Bridge-Items mitnehmen. Die playlistFutures oben ueberspringen
+        // ALLE '__'-IDs, also auch die Bridge-Turniere — dadurch fehlte ein
+        // laufendes Turnier hier komplett, obwohl es im Dropdown auswaehlbar
+        // war (Rio 2026: neuestes Video in "Alle Turniere" war Gstaad von
+        // Anfang Juli). Kein Netzwerk noetig, die Items liegen seit dem
+        // Bridge-Scrape im Cache; Duplikate faengt die Dedupe unten ab.
+        final bridgeFuture = _sourceVbw
+            ? Future.value(
+                _vbwBridgeItems.values.expand((l) => l).toList(growable: false))
+            : Future.value(const <VideoItem>[]);
         // Laola: gescrapte Live-Courts + hardcoded Fallback + dynamische
         // Tour-Pro-Replay-Liste — nur wenn Laola1-Toggle aktiv.
         final laolaFuture = _sourceLaola
@@ -2428,6 +2443,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final allResults = await Future.wait([
           ...playlistFutures,
           ...vtFutures,
+          bridgeFuture,
           laolaFuture,
           twitchFuture,
         ]);
