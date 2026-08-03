@@ -67,6 +67,9 @@ class S {
   /// Kachelwand noch voller Text.
   static String get spoilerRevealHint =>
       isEn ? 'Hold OK to reveal' : 'OK halten zum Aufdecken';
+  /// Gegenstueck fuer eine bereits aufgedeckte Karte.
+  static String get spoilerHideHint =>
+      isEn ? 'Hold OK to hide again' : 'OK halten zum Verbergen';
 
   // Update dialog
   static String downloadProgress(int pct) => isEn ? '$pct% downloaded…' : '$pct% heruntergeladen…';

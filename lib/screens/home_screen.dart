@@ -2039,7 +2039,17 @@ class _HomeScreenState extends State<HomeScreen> {
       silent = true;
     }
 
-    if (!silent) setState(() { _isLoading = true; _errorMessage = null; });
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+        // Alte Liste verwerfen. Sonst stehen bis zum Eintreffen der neuen
+        // Daten die Videos des VORHERIGEN Turniers da — mitsamt Spieler- und
+        // Land-Dropdowns, die dann nicht zur sichtbaren Auswahl passen. Ein
+        // Ladescreen ist ehrlicher als ein falscher Inhalt.
+        _videos = const [];
+      });
+    }
     try {
       // Twitch-GBT: Videos kommen aus dem TwitchApi-GQL-Cache. Kein
       // Merge mit VBW/Laola — die Twitch-Videos haben keine gender/round.
@@ -3095,6 +3105,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildVideoCard(VideoItem video) {
     return VideoCard(
+      // Ohne Key recycelt GridView.builder den State nach POSITION statt nach
+      // Video: ein aufgedecktes Finale hat dadurch das Finale jedes anderen
+      // Turniers gleich mit aufgedeckt, weil beide auf demselben Grid-Platz
+      // landen. Der Aufdeck-Zustand muss am Video haengen.
+      key: ValueKey(video.id),
       video: video,
       spoiler: _isSpoiler(video.round),
       onPressed: () => _openVideo(video),
@@ -3244,7 +3259,13 @@ class _HomeScreenState extends State<HomeScreen> {
                               textAlign: TextAlign.center,
                             ),
                           )
-                        : _isLoading && _videos.isEmpty
+                        // Waehrend eines nicht-stillen Ladevorgangs NUR den
+                        // Spinner. Frueher stand hier "_isLoading &&
+                        // _videos.isEmpty" — beim Turnierwechsel blieb damit
+                        // die alte Liste sichtbar und sah aus wie das Ergebnis
+                        // der neuen Auswahl. Hintergrund-Refreshes laufen
+                        // silent und setzen _isLoading gar nicht erst.
+                        : _isLoading
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : LayoutBuilder(builder: (context, constraints) {
                             final isTV = constraints.maxWidth > 900 || constraints.maxHeight > 900;

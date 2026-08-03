@@ -100,6 +100,91 @@ void main() {
     expect(opened, 0, reason: 'Aufdecken darf das Video nicht starten');
   });
 
+  /// Regression: langes Druecken war eine Einbahnstrasse — einmal aufgedeckt
+  /// liess sich der Schutz fuer diese Karte nicht wieder aktivieren.
+  testWidgets('nochmal lange druecken verbirgt wieder', (tester) async {
+    await tester.pumpWidget(_wrap(VideoCard(
+      video: _final(),
+      spoiler: true,
+      onPressed: () {},
+      genderBadge: const SizedBox.shrink(),
+      statusBadge: const SizedBox.shrink(),
+      dateStr: '31. Mai 2026',
+    )));
+
+    await tester.longPress(find.byType(VideoCard));
+    await tester.pumpAndSettle();
+    expect(find.textContaining(_teamA), findsOneWidget);
+
+    await tester.longPress(find.byType(VideoCard));
+    await tester.pumpAndSettle();
+    expect(find.textContaining(_teamA), findsNothing);
+    expect(find.text(S.spoilerActive), findsOneWidget);
+  });
+
+  /// Regression: GridView.builder recycelt den State nach Position. Ohne Key
+  /// hat das Aufdecken eines Finales die Finale ALLER Turniere mit aufgedeckt,
+  /// weil sie auf demselben Grid-Platz landen.
+  testWidgets('Aufdecken wirkt nur auf das eigene Video', (tester) async {
+    VideoItem other() => const VideoItem(
+          id: 'y',
+          title: 't2',
+          teams: 'Mol/Sorum (NOR) vs Cherif/Ahmed (QAT)',
+          gender: 'Men',
+          round: 'Final',
+          tournament: 'Gstaad I Elite I 2026',
+          thumbnailUrl: '',
+          duration: 0,
+        );
+
+    Widget grid(List<VideoItem> items) => MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              height: 400,
+              child: ListView(
+                children: [
+                  for (final v in items)
+                    // Der Key gehoert an das DIREKTE Listenkind — dort
+                    // entscheidet Flutter, welcher State zu welchem Eintrag
+                    // gehoert. In der App ist das die VideoCard selbst.
+                    SizedBox(
+                      key: ValueKey(v.id),
+                      height: 160,
+                      child: VideoCard(
+                        video: v,
+                        spoiler: true,
+                        onPressed: () {},
+                        genderBadge: const SizedBox.shrink(),
+                        statusBadge: const SizedBox.shrink(),
+                        dateStr: '31. Mai 2026',
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(grid([_final(), other()]));
+    expect(find.text(S.spoilerActive), findsNWidgets(2));
+
+    // Erste Karte aufdecken
+    await tester.longPress(find.byType(VideoCard).first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining(_teamA), findsOneWidget);
+    expect(find.text(S.spoilerActive), findsOneWidget,
+        reason: 'die zweite Karte bleibt verdeckt');
+
+    // Liste neu aufbauen — nur das erste Video wird ersetzt. Der Key sorgt
+    // dafuer, dass der Aufdeck-Zustand nicht auf den neuen Eintrag rutscht.
+    await tester.pumpWidget(grid([other(), _final()]));
+    await tester.pumpAndSettle();
+    expect(find.textContaining(_teamA), findsOneWidget,
+        reason: 'der aufgedeckte Eintrag bleibt derselbe, egal an welcher Position');
+    expect(find.text(S.spoilerActive), findsOneWidget);
+  });
+
   testWidgets('kurzer Tap oeffnet das Video statt aufzudecken', (tester) async {
     var opened = 0;
     await tester.pumpWidget(_wrap(VideoCard(

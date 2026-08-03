@@ -114,9 +114,12 @@ class VideoCardState extends State<VideoCard> {
     return TvFocusButton(
       onPressed: widget.onPressed,
       borderRadius: 8,
-      // Long-Press nur anbieten solange es etwas aufzudecken gibt. Sonst
-      // wuerde die Aktivierung unnoetig auf das Loslassen verschoben.
-      onLongPress: hidden ? () => setState(() => _revealed = true) : null,
+      // Umschalter: langes Druecken deckt auf UND wieder zu. Nur auf Karten
+      // die ueberhaupt unter Spoiler-Schutz stehen — sonst wuerde die
+      // Aktivierung unnoetig aufs Loslassen verschoben.
+      onLongPress: widget.spoiler
+          ? () => setState(() => _revealed = !_revealed)
+          : null,
       onFocusChanged: (focused) {
         setState(() => _focused = focused);
         if (focused) widget.onPreload?.call();
@@ -174,6 +177,13 @@ class VideoCardState extends State<VideoCard> {
                       if (teams.length > 1) ...[
                         const SizedBox(height: 2),
                         MarqueeText(text: teams[1], focused: _focused, style: teamStyle),
+                      ],
+                      // Selbst aufgedeckt: Gegenrichtung anbieten, sonst waere
+                      // der Schutz fuer diese Karte unwiderruflich weg.
+                      if (_revealed && _focused) ...[
+                        const SizedBox(height: 3),
+                        Text(S.spoilerHideHint,
+                          style: const TextStyle(fontSize: 9, color: Colors.white24)),
                       ],
                     ],
                   ]),
