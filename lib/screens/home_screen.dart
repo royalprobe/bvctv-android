@@ -4889,15 +4889,13 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                       ),
                     ])
                   // Neutrale Variante: kein Vereinsbezug, stattdessen das
-                  // App-Logo mit Hinweis darunter. ClipOval wie in der AppBar —
-                  // bvctv_logo.png hat KEIN Alpha und schwarze Ecken, die auf
-                  // dem orangen Oval sonst als schwarzer Kasten stehen wuerden.
+                  // App-Logo mit Hinweis darunter. Bewusst die freigestellte
+                  // Fassung — bvctv_logo.png hat KEIN Alpha, das ergab per
+                  // ClipOval eine weisse Scheibe auf dem orangen Oval.
                   : Column(mainAxisSize: MainAxisSize.min, children: [
-                      ClipOval(
-                        child: Image.asset('assets/bvctv_logo.png',
-                            width: 180, height: 180, fit: BoxFit.contain),
-                      ),
-                      const SizedBox(height: 18),
+                      Image.asset('assets/bvctv_logo_transparent.png',
+                          width: 170, height: 170, fit: BoxFit.contain),
+                      const SizedBox(height: 14),
                       Text(S.blackScreenHint,
                         style: const TextStyle(color: Colors.black54, fontSize: 17, letterSpacing: 1, fontWeight: FontWeight.w500)),
                     ]),
