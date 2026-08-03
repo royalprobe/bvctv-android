@@ -3,22 +3,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../l10n/app_language.dart';
 import '../app_variant.dart';
+import '../data/tournament_sources.dart';
+import '../models/video_item.dart';
+import '../widgets/pickers.dart';
+import '../widgets/tv_widgets.dart';
 import '../l10n/strings.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'login_screen.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'dart:async';
-import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/update_checker.dart';
+import '../services/vbw_titles.dart';
 import '../services/auth_service.dart';
 import '../services/auth_state.dart';
 import '../services/silent_login_flow.dart';
@@ -26,55 +26,7 @@ import '../services/laola_stream_extractor.dart';
 import '../services/laola_livestream_scraper.dart';
 import '../services/twitch_api.dart';
 import 'player_screen.dart';
-
-class VideoItem {
-  final String id;
-  final String title;
-  final String teams;
-  final String gender;
-  final String round;
-  final String tournament;
-  final String thumbnailUrl;
-  final int duration;
-  final DateTime? matchDate;
-  final String eventState;
-  final DateTime? scheduledEnd;
-  final String? linkUrl;
-
-  const VideoItem({
-    required this.id,
-    required this.title,
-    required this.teams,
-    required this.gender,
-    required this.round,
-    required this.tournament,
-    required this.thumbnailUrl,
-    required this.duration,
-    this.matchDate,
-    this.eventState = 'VOD_PUBLIC',
-    this.scheduledEnd,
-    this.linkUrl,
-  });
-
-  bool get isExternal => linkUrl != null && !isTwitch;
-  bool get isYouTube => linkUrl != null && linkUrl!.contains('youtube.com');
-  bool get isLaola => linkUrl != null && linkUrl!.contains('laola1.at');
-  // Twitch-Videos werden nicht extern per launchUrl geoeffnet — stattdessen
-  // ueber TwitchStream.extractMasterUrl und dem native PlayerScreen.
-  bool get isTwitch => linkUrl != null && linkUrl!.startsWith('twitch:');
-  String? get twitchVideoId => isTwitch ? linkUrl!.substring(7) : null;
-  bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
-  bool get isInstantVod {
-    if (eventState != 'INSTANT_VOD') return false;
-    final end = scheduledEnd ?? matchDate;
-    if (end == null) return true;
-    return DateTime.now().toUtc().difference(end.toUtc()) < const Duration(hours: 2);
-  }
-  bool get isUpcoming {
-    if (matchDate == null) return false;
-    return matchDate!.isAfter(DateTime.now().toUtc());
-  }
-}
+import 'webview_player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -89,9 +41,21 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _liveRefreshTimer;
   Timer? _videoRefreshTimer;
   Timer? _preloadFocusTimer;
+  Timer? _laolaScrapeTimer;
+  /// Abstand der Laola-Livestream-Scrapes. Ein Turnier kann mitten in der
+  /// Session live gehen; 12 Minuten sind frueh genug und kosten nur einen
+  /// HTML-Abruf.
+  static const _laolaScrapeInterval = Duration(minutes: 12);
+  /// Wie oft "Alle Turniere" im Hintergrund neu gebaut werden darf. Bewusst
+  /// deutlich seltener als der 90s-Tick des _videoRefreshTimer — siehe die
+  /// Begruendung dort.
+  static const _aggregateRefreshInterval = Duration(minutes: 10);
+  /// Zeitpunkt des letzten Aggregat-Aufbaus (in _loadVideos gesetzt).
+  DateTime? _lastAggregateRefresh;
   // Dynamisch aus https://www.laola1.at/de/tvthek/livestreams/ gescrapte
-  // Beach-Turniere. Format identisch zu _laolaTournamentData, sodass der
-  // bestehende Lookup-Pfad in _loadVideos gegen beide Listen sucht.
+  // Beach-Turniere — die EINZIGE Laola-Quelle. Es gab hier frueher zusaetzlich
+  // eine hartcodierte Turnier-Tabelle; die veraltete zwangslaeufig und kostete
+  // bei jedem Start Verfuegbarkeits-Requests fuer laengst gelaufene Turniere.
   List<Map<String, Object>> _scrapedLaolaTournaments = const [];
   WebViewController? _preloadController;
   String? _preloadedVideoId;
@@ -217,6 +181,19 @@ class _HomeScreenState extends State<HomeScreen> {
       if (pid.startsWith('__yt_') || pid.startsWith('__laola_')) return;
       // Virtuelle Turniere sind abgeschlossene Events, kein Refresh.
       if (pid.startsWith('__') && pid != _allId) return;
+      // "Alle Turniere" nur selten refreshen: die Aggregation holt JEDE
+      // VBW-Playlist neu, gemessen ~4 MB pro Durchlauf. Im 90s-Takt waeren
+      // das ~170 MB/Stunde plus das Parsen von ueber 2000 JSON-Eintraegen,
+      // und das auf einem Fire Stick. Der eigentliche Zweck — frische
+      // Live-Zustaende — wird von _loadLiveAndUpcoming im 60s-Takt gezielt
+      // und mit einem Bruchteil der Daten erledigt.
+      if (pid == _allId) {
+        final last = _lastAggregateRefresh;
+        if (last != null &&
+            DateTime.now().difference(last) < _aggregateRefreshInterval) {
+          return;
+        }
+      }
       _loadVideos(null, true, true);
     });
     if (Platform.isAndroid) {
@@ -225,10 +202,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     // Laola1-Livestream-Scraper laeuft erst NACH dem App-Start, damit VBW-
     // Playlists und Update-Check nicht durch einen externen Fetch verzoegert
-    // werden. KEIN periodischer Refresh — Court-IDs bleiben den Tag ueber
-    // stabil. Bei Bedarf trifft der User den Aktualisieren-Button in der
-    // AppBar, der re-triggert auch den Scrape.
+    // werden. Danach periodisch: die Court-IDs sind zwar den Tag ueber stabil,
+    // aber ein Turnier das WAEHREND der Session live geht wuerde sonst nie
+    // auftauchen — auf einem Fire Stick der tagelang laeuft heisst das: den
+    // ganzen Tag nichts Neues. Ein HTML-Abruf ist billig genug dafuer.
     Future.delayed(const Duration(seconds: 8), _scrapeLaolaLivestreams);
+    _laolaScrapeTimer = Timer.periodic(
+        _laolaScrapeInterval, (_) => _scrapeLaolaLivestreams());
   }
 
   Future<void> _checkForUpdateOnce() async {
@@ -269,20 +249,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!mounted) return;
 
-    // Dedup: wenn die hardcoded _laolaTournamentData die gleiche Player-ID
-    // hat (gleiche Court-IDs am gleichen Tag), Scrape-Eintrag verwerfen —
-    // hardcoded Tabelle hat ggf. korrekte Court-Namen + Thumbnails.
-    final hardcodedIds = _laolaTournamentData
-        .expand((t) => (t['videos'] as List).cast<Map<String, String>>())
-        .map((v) => v['id']!)
-        .toSet();
-    final deduped = validated.where((t) {
-      final vids = (t['videos'] as List).cast<Map<String, String>>();
-      return !vids.every((v) => hardcodedIds.contains(v['id']!));
-    }).toList();
-
-    _scrapedLaolaTournaments = deduped;
-    if (deduped.isEmpty) return;
+    _scrapedLaolaTournaments = validated;
+    if (validated.isEmpty) return;
 
     // Die Aggregat-Ansicht ("Alle Turniere") zieht ihre Laola-Items aus
     // _scrapedLaolaTournaments — die war beim App-Start aber noch leer, weil
@@ -298,7 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Tournament-Liste fuer den User aktualisieren — bestehende Eintraege
     // bleiben, gescrapte werden vorne eingefuegt (= aktuellste Spieltage
     // oben). Aktuell ausgewaehltes Tournament wird NICHT umgeschaltet.
-    final newEntries = deduped
+    final newEntries = validated
         .map((t) => {
               'id': t['id'] as String,
               'title': t['title'] as String,
@@ -402,6 +370,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _liveRefreshTimer?.cancel();
     _videoRefreshTimer?.cancel();
+    _laolaScrapeTimer?.cancel();
     _preloadFocusTimer?.cancel();
     try { _preloadController?.loadRequest(Uri.parse('about:blank')); } catch (_) {}
     super.dispose();
@@ -706,7 +675,7 @@ class _HomeScreenState extends State<HomeScreen> {
             final display = value.isEmpty
                 ? placeholder
                 : (obscure ? '•' * value.length.clamp(0, 12) : value);
-            return _TvFocusButton(
+            return TvFocusButton(
               autofocus: autofocus,
               borderRadius: 8,
               onPressed: onEdit,
@@ -998,7 +967,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
               const Divider(color: Colors.white12, height: 16),
-              _TvFocusButton(
+              TvFocusButton(
                 borderRadius: 6,
                 onPressed: () async {
                   final result = await showDialog<String>(
@@ -1060,7 +1029,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 future: _storage.read(key: 'saved_email').then((v) => v != null && v.isNotEmpty),
                 builder: (futureCtx, snapshot) {
                   final stored = snapshot.data ?? false;
-                  return _TvFocusButton(
+                  return TvFocusButton(
                     autofocus: focusSavedCredentials,
                     borderRadius: 6,
                     onPressed: () async {
@@ -1092,7 +1061,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const Divider(color: Colors.white12, height: 24),
               Row(children: [
-                _TvFocusButton(
+                TvFocusButton(
                   // Wenn wir vom Login-Fehler-Flow her kommen, sitzt der
                   // Initial-Fokus auf den Gespeicherte-Zugangsdaten-Button.
                   // Sonst wie gehabt auf Logout.
@@ -1129,7 +1098,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const Spacer(),
-                _TvFocusButton(
+                TvFocusButton(
                   borderRadius: 6,
                   onPressed: () => Navigator.pop(ctx),
                   child: Padding(
@@ -1145,7 +1114,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text('v$_appVersion',
                         style: const TextStyle(color: Colors.white24, fontSize: 11)),
-                    _TvFocusButton(
+                    TvFocusButton(
                       borderRadius: 6,
                       onPressed: () async {
                         setDialog(() => updateMsg = null);
@@ -1302,20 +1271,17 @@ class _HomeScreenState extends State<HomeScreen> {
         } catch (_) {}
       }));
 
-      // Virtuelle + Laola1-Turniere immer anhängen
-      final virtualEntries = _virtualTournamentData
+      // Virtuelle Turniere immer anhängen
+      final virtualEntries = virtualTournamentData
           .map((vt) => {'id': vt['id'] as String, 'title': vt['title'] as String})
           .toList();
-      final laolaFallbackEntries = AppVariant.vbtvOnly
-          ? const <Map<String, String>>[]
-          : _laolaTournamentData
-              .map((lt) =>
-                  {'id': lt['id'] as String, 'title': lt['title'] as String})
-              .toList();
 
       if (cgPlaylistIds.isEmpty) {
-        // Kein API-Ergebnis → sofort Laola1 + virtuelle Turniere zeigen
-        final fallback = [...laolaFallbackEntries, ...virtualEntries];
+        // Kein API-Ergebnis → wenigstens die virtuellen Turniere zeigen.
+        // Laola-Turniere stehen hier bewusst NICHT mehr: die kamen frueher aus
+        // einer hartcodierten Tabelle, die zwangslaeufig veraltete. Sie liefert
+        // der Scraper jetzt zur Laufzeit (_scrapeLaolaLivestreams).
+        final fallback = virtualEntries;
         if (mounted) {
           setState(() {
             _availableTournaments = fallback;
@@ -1378,7 +1344,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // Reguläre Turniere UND YouTube-Playlists parallel laden
       final realTournamentsF = Future.wait(cgPlaylistIds.map(fetchTitle))
           .then((r) => r.whereType<Map<String, String>>().toList());
-      final youtubeTournamentsF = Future.wait(_youtubePlaylistIds.map((pid) async {
+      final youtubeTournamentsF = Future.wait(youtubePlaylistIds.map((pid) async {
         final data = await _fetchYoutubePlaylist(pid);
         if (data == null) return null;
         _youtubeCache[pid] = data;
@@ -1393,7 +1359,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // In der neutralen Variante komplett uebersprungen (siehe AppVariant).
       final laolaDynamicF = AppVariant.vbtvOnly
           ? Future.value(const <Map<String, String>>[])
-          : Future.wait(_laolaDynamicPlaylists.map((config) async {
+          : Future.wait(laolaDynamicPlaylists.map((config) async {
               final data = await _fetchLaolaList(config);
               if (data == null) return null;
               _laolaListCache[config['id']!] = data;
@@ -1415,29 +1381,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return _fetchVbwBridgeTournaments(cgPlaylistIds.toSet(), knownCis);
       });
 
-      // Laola1-Turniere: pro Tournament gegen /access/hls checken welche
-      // Streams gerade live sind. Tournaments mit 0 verfügbaren Streams gar
-      // nicht in die Liste aufnehmen. Cache wird in _loadVideos wiederverwendet.
-      final laolaTournamentsF = AppVariant.vbtvOnly
-          ? Future.value(const <Map<String, String>>[])
-          : Future.wait(_laolaTournamentData.map((lt) async {
-              final tournId = lt['id'] as String;
-              final videos = (lt['videos'] as List).cast<Map<String, String>>();
-              final ids = videos.map((v) => v['id']!).toList();
-              final avail = await _fetchLaolaAvailability(ids);
-              _laolaAvailCache[tournId] = avail;
-              if (!avail.values.any((v) => v)) return null;
-              return <String, String>{
-                'id': tournId,
-                'title': lt['title'] as String,
-                'matchDate': lt['matchDate'] as String,
-              };
-            })).then((r) => r.whereType<Map<String, String>>().toList());
-
       final realTournaments = await realTournamentsF;
       final youtubeTournaments = await youtubeTournamentsF;
       final laolaDynamicTournaments = await laolaDynamicF;
-      final laolaTournaments = await laolaTournamentsF;
       final vbwBridgeTournaments = await vbwBridgeF;
       // Twitch-GBT — Best-Effort. Wenn der GQL-Endpoint nicht antwortet
       // oder keine GBT-Videos da sind, wird das Turnier weggelassen (der
@@ -1462,7 +1408,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ...realTournaments,
         ...youtubeTournaments,
         ...laolaDynamicTournaments,
-        ...laolaTournaments,
         ...vbwBridgeTournaments,
         ...twitchTournaments,
       ];
@@ -1517,14 +1462,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _allId = '__all__';
 
-  // YouTube-Playlists werden als eigene Turniere ohne API-Key via RSS-Feed geladen
-  // (https://www.youtube.com/feeds/videos.xml?playlist_id=...). Klick öffnet YouTube App.
-  static const List<String> _youtubePlaylistIds = [
-    'PLQUMXo3n8RdbkhsBbZIJE2Xm9iwe7oHW6',
-    'PLQUMXo3n8RdaxKFvodbdAEdF7RDz9g37O',
-    'PLQUMXo3n8Rdbne15axkZXDNnksOVVE6CB',
-    'PLQUMXo3n8RdaWp2OaQCbl_4HjzD7HyANE',
-  ];
 
   // Cache der RSS-Ergebnisse (Title + Latest-Date + Entries)
   // Befüllt in _loadTournamentList, gelesen in _loadVideos.
@@ -1580,18 +1517,6 @@ class _HomeScreenState extends State<HomeScreen> {
   /// kostet ~650 KB; 500 waere 1 MB fuer neun weitere Matches.
   static const int _vbwExtraFeedLimit = 300;
 
-  // Dynamische Laola1-Listen: URL → Cache der gefetchten Videos. Wird in
-  // _loadTournamentList befüllt (parallel zu YouTube + VBW) und in _loadVideos
-  // gelesen. So bleiben die Listen auch nach Neustart aktuell.
-  static const List<Map<String, String>> _laolaDynamicPlaylists = [
-    {
-      'id': '__laola_tour_pro__',
-      'title': 'win2day Beach Volleyball Tour Pro',
-      'baseUrl':
-          'https://www.laola1.at/de/daten/videos/beachvolleyball/win2day-beachvolleyball-tour-pro/',
-      'pages': '4',
-    },
-  ];
   final Map<String, Map<String, dynamic>> _laolaListCache = {};
 
   Future<Map<String, dynamic>?> _fetchLaolaList(
@@ -1833,7 +1758,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return <String, String>{
           'id': '__vbw_$ci',
-          'title': title,
+          'title': normalizeBridgeTournamentTitle(title),
           'matchDate': matchDate,
         };
       }));
@@ -1943,89 +1868,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Laola1.at-Turniere: externer Stream, klick öffnet Browser/App.
-  // Jeder Court ist ein eigenes "Video" innerhalb des Turniers.
-  static const List<Map<String, Object>> _laolaTournamentData = [
-    {
-      'id': '__laola_innsbruck_2026__',
-      'title': 'Pro Masters Innsbruck 2026',
-      'matchDate': '2026-06-06',
-      'tournament': 'win2day PRO MASTERS Innsbruck',
-      'videos': [
-        {
-          'id': '2173012',
-          'title': 'Center Court',
-          'url': 'https://www.laola1.at/de/video/player/2173012',
-          'thumbnail': '',
-        },
-        {
-          'id': '2173014',
-          'title': 'Court 2',
-          'url': 'https://www.laola1.at/de/video/player/2173014',
-          'thumbnail': '',
-        },
-      ],
-    },
-    {
-      'id': '__laola_poertschach_2026__',
-      'title': 'Pro Masters Pörtschach 2026',
-      'matchDate': '2026-05-24',
-      'tournament': 'win2day PRO MASTERS Pörtschach',
-      'videos': [
-        {
-          'id': '2166464',
-          'title': 'Center Court (2)',
-          'url': 'https://www.laola1.at/de/video/player/2166464',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/a23abc46-642b-4c83-a48d-0dd1c4939841.jpg',
-        },
-        {
-          'id': '2166465',
-          'title': 'Court 2 (2)',
-          'url': 'https://www.laola1.at/de/video/player/2166465',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/48173962-5ca9-4d5a-aa95-b3955e960881.jpg',
-        },
-        // Filtering passiert dynamisch in _loadVideos über _fetchLaolaAvailability
-        // (Laola-API liefert autoBroadcast / autoOffline-Fenster).
-        {
-          'id': '2166466',
-          'title': 'Center Court (3)',
-          'url': 'https://www.laola1.at/de/video/player/2166466',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/d5306f03-26a8-4942-93b1-aae809ef6af7.jpg',
-        },
-        {
-          'id': '2166467',
-          'title': 'Medaillen-Entscheidung',
-          'url': 'https://www.laola1.at/de/video/player/2166467',
-          'thumbnail':
-              'https://video.laola1.at/image/800x450/7706cdb5-120e-4cde-8319-929d81bbf7cc.jpg',
-        },
-      ],
-    },
-  ];
-
-  static const List<Map<String, Object>> _virtualTournamentData = [
-    {
-      'id': '__vienna_2024__',
-      'title': 'Vienna Major 2024',
-      'mediaIds': ['4RG6E1wA', 'n6NDlmCj', 'XQVdmpFC', 'laCkprbO', 'FLZtiJ9Z',
-        '8li0jBJe', '5JOX9Zpz', 'BOWRuzeN', 'VywVMOqw', 'd1NqbjrE',
-        'ZpN2Vhnw', 'IRVhVQ2t', 'DCFk0ZYf', 'UVvmO0r9', '5FZAHSsV',
-        '8XUQvIE3', 'ogri3G7h', 'RxqdUmDp', 'usMGFmN4', 'wD1zmqgb',
-        'wtj3USLB', 'N8vHjvMY', 'TTVKq5tB', '2fX2rQ2A', 't3vVHMOk'],
-    },
-    {
-      'id': '__gstaad_2024__',
-      'title': 'Gstaad Elite 16 2024',
-      'mediaIds': ['l0qOShMO', 'I1koTibO', 'iNbKD4di', 'tFFKBGyC', 'fh12jyMp',
-        'Q4fhGHXb', 'n9lNrdhv', '3BKffIP4', 'uJAbnTbv', 'JsNjX9k3',
-        'kC9a5m0F', 'czsKhte7', 'B8DJejXV', 'NTfMsa0g', 'AAuLHsCf',
-        'xgYZIIL6', '9OR1dC3f', 'rF0dKawq', 'uo94x2LN', 'ldSojZLA',
-        '4HeH8h2G', 'fUKcEDwH', 'qqoXMRUo', 'mnLEAed6', 'qL5OiaNx'],
-    },
-  ];
 
   VideoItem _itemFromJson(dynamic item) {
     final title = item['title'] as String? ?? '';
@@ -2080,8 +1922,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<List<VideoItem>> _allLaolaVideoItemsForAggregate() async {
     final out = <VideoItem>[];
 
-    final liveTournaments = [..._laolaTournamentData, ..._scrapedLaolaTournaments];
-    for (final lt in liveTournaments) {
+    for (final lt in _scrapedLaolaTournaments) {
       try {
         final tournamentName = lt['tournament'] as String? ?? '';
         final dateStr = lt['matchDate'] as String?;
@@ -2110,7 +1951,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {}
     }
 
-    for (final config in _laolaDynamicPlaylists) {
+    for (final config in laolaDynamicPlaylists) {
       try {
         final cid = config['id']!;
         final data = _laolaListCache[cid] ?? await _fetchLaolaList(config);
@@ -2239,7 +2080,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (pid.startsWith('__laola_')) {
         // Dynamische Laola-Liste (z.B. Tour Pro) – Cache wurde in
         // _loadTournamentList befüllt; fallback: jetzt fetchen.
-        final dynConfig = _laolaDynamicPlaylists
+        final dynConfig = laolaDynamicPlaylists
             .firstWhere((c) => c['id'] == pid, orElse: () => const {});
         if (dynConfig.isNotEmpty) {
           Map<String, dynamic>? data = _laolaListCache[pid];
@@ -2272,9 +2113,8 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
 
-        // Lookup gegen hardcoded Tabelle UND gegen die zur Laufzeit
-        // gescrapten Eintraege aus LaolaLivestreamScraper.
-        final ltData = [..._laolaTournamentData, ..._scrapedLaolaTournaments]
+        // Lookup gegen die zur Laufzeit gescrapten Laola-Eintraege.
+        final ltData = _scrapedLaolaTournaments
             .firstWhere((t) => t['id'] == pid, orElse: () => const {});
         if (ltData.isNotEmpty) {
           final tournamentName = ltData['tournament'] as String? ?? '';
@@ -2378,7 +2218,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Virtuelles Turnier (einzelne Media-IDs)
       if (pid.startsWith('__') && pid != _allId) {
-        final vtData = _virtualTournamentData.cast<Map<String, Object>>()
+        final vtData = virtualTournamentData.cast<Map<String, Object>>()
             .firstWhere((v) => v['id'] == pid, orElse: () => const {});
         if (vtData.isNotEmpty) {
           final videos = await _loadVirtualTournament(vtData)
@@ -2418,7 +2258,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 })
             : const <Future<List<VideoItem>>>[];
         final Iterable<Future<List<VideoItem>>> vtFutures = _sourceVbw
-            ? _virtualTournamentData.map(_loadVirtualTournament)
+            ? virtualTournamentData.map(_loadVirtualTournament)
             : const <Future<List<VideoItem>>>[];
         // VBW-Bridge-Items mitnehmen. Die playlistFutures oben ueberspringen
         // ALLE '__'-IDs, also auch die Bridge-Turniere — dadurch fehlte ein
@@ -2457,6 +2297,7 @@ class _HomeScreenState extends State<HomeScreen> {
             return b.matchDate!.compareTo(a.matchDate!);
           });
         _videosCache[pid] = unique;
+        _lastAggregateRefresh = DateTime.now();
         if (_videosLoadEpoch == epoch && mounted) {
           setState(() => _videos = unique);
         }
@@ -3060,7 +2901,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _filterChip(String label, String value, {bool autofocus = false}) {
     final selected = _genderFilter == value;
-    return _TvFocusButton(
+    return TvFocusButton(
       autofocus: autofocus,
       onPressed: () => setState(() { _genderFilter = value; }),
       borderRadius: 20,
@@ -3091,7 +2932,7 @@ class _HomeScreenState extends State<HomeScreen> {
             : src == 'twitch'
                 ? _sourceTwitch
                 : false;
-    return _TvFocusButton(
+    return TvFocusButton(
       onPressed: () => _toggleSource(src),
       borderRadius: 20,
       child: Container(
@@ -3133,7 +2974,7 @@ class _HomeScreenState extends State<HomeScreen> {
         isScrollControlled: true,
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-        builder: (_) => _TournamentSheet(
+        builder: (_) => TournamentSheet(
           tournaments: visible,
           currentId: _currentPlaylistId,
           allId: _allId,
@@ -3145,7 +2986,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 160),
-      child: _TvFocusButton(
+      child: TvFocusButton(
         onPressed: open,
         borderRadius: 20,
         child: Container(
@@ -3180,12 +3021,12 @@ class _HomeScreenState extends State<HomeScreen> {
         isScrollControlled: true,
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-        builder: (_) => _PlayerSearchSheet(players: players, selected: _playerFilter),
+        builder: (_) => PlayerSearchSheet(players: players, selected: _playerFilter),
       );
       if (result == null) return;
       setState(() => _playerFilter = result.isEmpty ? null : result);
     }
-    return _TvFocusButton(
+    return TvFocusButton(
       onPressed: open,
       borderRadius: 20,
       child: Container(
@@ -3222,12 +3063,12 @@ class _HomeScreenState extends State<HomeScreen> {
         isScrollControlled: true,
         shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-        builder: (_) => _CountrySearchSheet(countries: countries, selected: _countryFilter),
+        builder: (_) => CountrySearchSheet(countries: countries, selected: _countryFilter),
       );
       if (result == null) return;
       setState(() => _countryFilter = result.isEmpty ? null : result);
     }
-    return _TvFocusButton(
+    return TvFocusButton(
       onPressed: open,
       borderRadius: 20,
       child: Container(
@@ -3253,7 +3094,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildVideoCard(VideoItem video) {
-    return _VideoCard(
+    return VideoCard(
       video: video,
       spoiler: _isSpoiler(video.round),
       onPressed: () => _openVideo(video),
@@ -3285,7 +3126,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(S.exitAppDesc, style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 16),
                 Row(children: [
-                  _TvFocusButton(
+                  TvFocusButton(
                     autofocus: true,
                     borderRadius: 6,
                     onPressed: () => Navigator.pop(ctx, false),
@@ -3295,7 +3136,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const Spacer(),
-                  _TvFocusButton(
+                  TvFocusButton(
                     borderRadius: 6,
                     onPressed: () => Navigator.pop(ctx, true),
                     child: Padding(
@@ -3455,1758 +3296,3 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
-
-// ── Marquee (scrollender Text bei Fokus) ─────────────────────────────────────
-
-class _MarqueeText extends StatefulWidget {
-  final String text;
-  final bool focused;
-  final TextStyle style;
-  const _MarqueeText({required this.text, required this.focused, required this.style});
-  @override
-  State<_MarqueeText> createState() => _MarqueeTextState();
-}
-
-class _MarqueeTextState extends State<_MarqueeText> {
-  final _scroll = ScrollController();
-  Timer? _timer;
-
-  @override
-  void didUpdateWidget(_MarqueeText old) {
-    super.didUpdateWidget(old);
-    if (widget.focused && !old.focused) { _startScroll(); }
-    else if (!widget.focused && old.focused) { _resetScroll(); }
-  }
-
-  void _startScroll() {
-    _timer?.cancel();
-    _timer = Timer(const Duration(milliseconds: 600), () async {
-      if (!mounted || !_scroll.hasClients) return;
-      final max = _scroll.position.maxScrollExtent;
-      if (max <= 0) return;
-      await _scroll.animateTo(max,
-          duration: Duration(milliseconds: (max * 22).round()),
-          curve: Curves.linear);
-    });
-  }
-
-  void _resetScroll() {
-    _timer?.cancel();
-    if (_scroll.hasClients) _scroll.jumpTo(0);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-        controller: _scroll,
-        scrollDirection: Axis.horizontal,
-        physics: const NeverScrollableScrollPhysics(),
-        child: Text(widget.text, style: widget.style, maxLines: 1),
-      );
-}
-
-// ── VideoCard ─────────────────────────────────────────────────────────────────
-
-class _VideoCard extends StatefulWidget {
-  final VideoItem video;
-  final bool spoiler;
-  final VoidCallback onPressed;
-  final VoidCallback? onPreload;
-  final Widget genderBadge;
-  final Widget statusBadge;
-  final String dateStr;
-  const _VideoCard({
-    required this.video,
-    required this.spoiler,
-    required this.onPressed,
-    required this.genderBadge,
-    required this.statusBadge,
-    required this.dateStr,
-    this.onPreload,
-  });
-  @override
-  State<_VideoCard> createState() => _VideoCardState();
-}
-
-class _VideoCardState extends State<_VideoCard> {
-  bool _focused = false;
-
-  static List<String> _splitTeams(String teams) {
-    final idx = teams.indexOf(' vs ');
-    if (idx < 0) return [teams];
-    return [teams.substring(0, idx).trim(), teams.substring(idx + 4).trim()];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final video = widget.video;
-    final teams = _splitTeams(video.teams);
-    const teamStyle = TextStyle(fontSize: 12, fontWeight: FontWeight.bold);
-
-    return _TvFocusButton(
-      onPressed: widget.onPressed,
-      borderRadius: 8,
-      onFocusChanged: (focused) {
-        setState(() => _focused = focused);
-        if (focused) widget.onPreload?.call();
-      },
-      child: Container(
-        decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
-        padding: const EdgeInsets.all(10),
-        child: video.isYouTube
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(children: [
-                    widget.statusBadge,
-                    const SizedBox(width: 6),
-                    const Text('YouTube', style: TextStyle(color: Colors.white38, fontSize: 10)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Expanded(child: Text(video.title,
-                    style: teamStyle, maxLines: 3, overflow: TextOverflow.ellipsis)),
-                  Text(S.opensYouTube,
-                    style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      widget.genderBadge,
-                      if (video.gender.isNotEmpty) const SizedBox(width: 6),
-                      Expanded(child: Text(S.localizeRound(video.round),
-                        style: const TextStyle(color: Colors.white60, fontSize: 10),
-                        overflow: TextOverflow.ellipsis)),
-                      widget.statusBadge,
-                    ]),
-                    const SizedBox(height: 6),
-                    if (widget.spoiler)
-                      Row(children: [
-                        const Icon(Icons.lock_outline, size: 12, color: Colors.white30),
-                        const SizedBox(width: 4),
-                        Expanded(child: Text(S.spoilerActive,
-                          style: const TextStyle(fontSize: 11, color: Colors.white30, fontStyle: FontStyle.italic))),
-                      ])
-                    else ...[
-                      _MarqueeText(text: teams[0], focused: _focused, style: teamStyle),
-                      if (teams.length > 1) ...[
-                        const SizedBox(height: 2),
-                        _MarqueeText(text: teams[1], focused: _focused, style: teamStyle),
-                      ],
-                    ],
-                  ]),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(video.tournament,
-                      style: const TextStyle(color: Colors.white38, fontSize: 10),
-                      overflow: TextOverflow.ellipsis),
-                    Text(widget.dateStr,
-                      style: const TextStyle(color: Colors.white38, fontSize: 10)),
-                  ]),
-                ],
-              ),
-      ),
-    );
-  }
-}
-
-// ── TvFocusButton ─────────────────────────────────────────────────────────────
-
-class _TvFocusButton extends StatefulWidget {
-  final Widget child;
-  final VoidCallback onPressed;
-  final double borderRadius;
-  final bool autofocus;
-  final void Function(bool)? onFocusChanged;
-
-  const _TvFocusButton({
-    required this.child,
-    required this.onPressed,
-    this.borderRadius = 8,
-    this.autofocus = false,
-    this.onFocusChanged,
-  });
-
-  @override
-  State<_TvFocusButton> createState() => _TvFocusButtonState();
-}
-
-class _TvFocusButtonState extends State<_TvFocusButton> {
-  bool _focused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      autofocus: widget.autofocus,
-      onFocusChange: (f) { setState(() => _focused = f); widget.onFocusChanged?.call(f); },
-      onKeyEvent: (_, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-             event.logicalKey == LogicalKeyboardKey.enter)) {
-          widget.onPressed();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: GestureDetector(
-        onTap: widget.onPressed,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 100),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(widget.borderRadius + 3),
-            border: Border.all(
-              color: _focused ? Colors.orange : Colors.transparent,
-              width: 3,
-            ),
-            boxShadow: _focused
-                ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.2), blurRadius: 6, spreadRadius: 0)]
-                : null,
-          ),
-          child: widget.child,
-        ),
-      ),
-    );
-  }
-}
-
-class _TvFocusWrapper extends StatefulWidget {
-  final Widget child;
-  final double borderRadius;
-
-  const _TvFocusWrapper({required this.child, required this.borderRadius});
-
-  @override
-  State<_TvFocusWrapper> createState() => _TvFocusWrapperState();
-}
-
-class _TvFocusWrapperState extends State<_TvFocusWrapper> {
-  bool _focused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      skipTraversal: true,
-      onFocusChange: (f) => setState(() => _focused = f),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(widget.borderRadius + 3),
-          border: Border.all(color: _focused ? Colors.orange : Colors.transparent, width: 3),
-          boxShadow: _focused
-              ? [BoxShadow(color: Colors.orange.withValues(alpha: 0.6), blurRadius: 10, spreadRadius: 1)]
-              : null,
-        ),
-        child: widget.child,
-      ),
-    );
-  }
-}
-
-class _TournamentSheet extends StatefulWidget {
-  final List<Map<String, String>> tournaments;
-  final String currentId;
-  final String allId;
-
-  const _TournamentSheet({required this.tournaments, required this.currentId, required this.allId});
-
-  @override
-  State<_TournamentSheet> createState() => _TournamentSheetState();
-}
-
-class _TournamentSheetState extends State<_TournamentSheet> {
-  final _firstFocus = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _firstFocus.requestFocus();
-    });
-  }
-
-  @override
-  void dispose() {
-    _firstFocus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [
-      {'id': widget.allId, 'title': S.allTournaments},
-      ...widget.tournaments,
-    ];
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        margin: const EdgeInsets.symmetric(vertical: 10),
-        width: 40, height: 4,
-        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
-      ),
-      Flexible(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(items.length, (i) {
-              final id = items[i]['id']!;
-              final title = items[i]['title']!;
-              final isActive = id == widget.currentId;
-              return Focus(
-                onKeyEvent: i == 0 ? (_, event) {
-                  if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                    return KeyEventResult.handled;
-                  }
-                  return KeyEventResult.ignored;
-                } : null,
-                child: ListTile(
-                  focusNode: i == 0 ? _firstFocus : null,
-                  title: Text(title, style: TextStyle(
-                    color: isActive ? Colors.orange : Colors.white70,
-                    fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                  )),
-                  trailing: isActive ? const Icon(Icons.check, color: Colors.orange, size: 18) : null,
-                  onTap: () => Navigator.pop(context, id),
-                ),
-              );
-            }),
-          ),
-        ),
-      ),
-      const SizedBox(height: 16),
-    ]);
-  }
-}
-
-class _PlayerSearchSheet extends StatefulWidget {
-  final List<String> players;
-  final String? selected;
-  const _PlayerSearchSheet({required this.players, this.selected});
-
-  @override
-  State<_PlayerSearchSheet> createState() => _PlayerSearchSheetState();
-}
-
-class _PlayerSearchSheetState extends State<_PlayerSearchSheet> {
-  final _ctrl = TextEditingController();
-  final _firstFocus = FocusNode();
-  final _searchFocus = FocusNode();
-  bool _searchActive = false;
-  bool _searchFocused = false;
-  late List<String> _filtered;
-
-  @override
-  void initState() {
-    super.initState();
-    _filtered = widget.players;
-    _ctrl.addListener(() {
-      final q = _ctrl.text.toLowerCase();
-      setState(() {
-        _filtered = q.isEmpty
-            ? widget.players
-            : widget.players.where((p) => p.toLowerCase().contains(q)).toList();
-      });
-    });
-    _searchFocus.addListener(() {
-      if (mounted) {
-        setState(() {
-        _searchFocused = _searchFocus.hasFocus;
-        if (!_searchFocus.hasFocus) _searchActive = false;
-      });
-      }
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _firstFocus.requestFocus();
-    });
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    _firstFocus.dispose();
-    _searchFocus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          margin: const EdgeInsets.symmetric(vertical: 10),
-          width: 40, height: 4,
-          decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Focus(
-            onFocusChange: (hasFocus) {
-              if (mounted) {
-                setState(() {
-                _searchFocused = hasFocus;
-                if (!hasFocus && !_searchFocus.hasFocus) _searchActive = false;
-              });
-              }
-            },
-            onKeyEvent: (_, event) {
-              if (!_searchActive && event is KeyDownEvent &&
-                  (event.logicalKey == LogicalKeyboardKey.select ||
-                   event.logicalKey == LogicalKeyboardKey.enter)) {
-                setState(() => _searchActive = true);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) _searchFocus.requestFocus();
-                });
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: TextField(
-            controller: _ctrl,
-            focusNode: _searchFocus,
-            autofocus: false,
-            readOnly: !_searchActive,
-            onTap: () { if (!_searchActive) setState(() => _searchActive = true); },
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: S.searchPlayers,
-              hintStyle: const TextStyle(color: Colors.white38),
-              prefixIcon: const Icon(Icons.search, color: Colors.white38),
-              suffixIcon: _ctrl.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.white38),
-                      onPressed: () => _ctrl.clear(),
-                    )
-                  : null,
-              filled: true,
-              fillColor: _searchActive || _searchFocused ? const Color(0xFF2A2A2A) : const Color(0xFF161616),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-          ),
-        ),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
-          child: ListView(shrinkWrap: true, children: [
-            ListTile(
-              focusNode: _firstFocus,
-              leading: Icon(Icons.people, size: 20,
-                  color: widget.selected == null ? Colors.orange : Colors.white38),
-              title: Text(S.allPlayers, style: TextStyle(
-                color: widget.selected == null ? Colors.orange : Colors.white70,
-                fontWeight: widget.selected == null ? FontWeight.bold : FontWeight.normal,
-              )),
-              onTap: () => Navigator.pop(context, ''),
-            ),
-            ..._filtered.map((p) => ListTile(
-              leading: Icon(Icons.person, size: 20,
-                  color: p == widget.selected ? Colors.orange : Colors.white38),
-              title: Text(p, style: TextStyle(
-                color: p == widget.selected ? Colors.orange : Colors.white70,
-                fontWeight: p == widget.selected ? FontWeight.bold : FontWeight.normal,
-              )),
-              onTap: () => Navigator.pop(context, p),
-            )),
-          ]),
-        ),
-        const SizedBox(height: 16),
-      ]),
-    );
-  }
-}
-
-class _CountrySearchSheet extends StatelessWidget {
-  final List<String> countries;
-  final String? selected;
-  const _CountrySearchSheet({required this.countries, this.selected});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        margin: const EdgeInsets.symmetric(vertical: 10),
-        width: 40, height: 4,
-        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
-      ),
-      ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
-        child: ListView(shrinkWrap: true, children: [
-          ListTile(
-            leading: Icon(Icons.flag_outlined, size: 20,
-                color: selected == null ? Colors.orange : Colors.white38),
-            title: Text(S.allCountries, style: TextStyle(
-              color: selected == null ? Colors.orange : Colors.white70,
-              fontWeight: selected == null ? FontWeight.bold : FontWeight.normal,
-            )),
-            onTap: () => Navigator.pop(context, ''),
-          ),
-          ...countries.map((c) => ListTile(
-            leading: Icon(Icons.flag, size: 20,
-                color: c == selected ? Colors.orange : Colors.white38),
-            title: Text(c, style: TextStyle(
-              color: c == selected ? Colors.orange : Colors.white70,
-              fontWeight: c == selected ? FontWeight.bold : FontWeight.normal,
-            )),
-            onTap: () => Navigator.pop(context, c),
-          )),
-        ]),
-      ),
-      const SizedBox(height: 16),
-    ]);
-  }
-}
-
-class WebViewPlayerScreen extends StatefulWidget {
-  final String title;
-  final String playerUrl;
-  final String accessToken;
-  final bool useRealDuration;
-  final bool seekToLive;
-  final bool isLive;
-  const WebViewPlayerScreen({super.key, required this.title, required this.playerUrl, required this.accessToken, this.useRealDuration = false, this.seekToLive = false, this.isLive = false});
-
-  @override
-  State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
-}
-
-class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
-  WebViewController? _controller;
-  InAppWebViewController? _inAppController;
-
-  bool get _useInAppWebView => !kIsWeb && Platform.isWindows;
-
-  void _runJs(String js) {
-    if (_useInAppWebView) {
-      _inAppController?.evaluateJavascript(source: js);
-    } else {
-      _controller?.runJavaScript(js);
-    }
-  }
-
-  void _loadUrl(String url) {
-    if (_useInAppWebView) {
-      _inAppController?.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
-    } else {
-      _controller?.loadRequest(Uri.parse(url));
-    }
-  }
-
-  Duration get _effectiveDuration {
-    if (widget.isLive) {
-      // Live: max = aktuelle Live-Kante (seekable.end), kein künstliches Limit
-      return _liveEdge > 0 ? Duration(seconds: _liveEdge.floor()) : Duration(seconds: _realDuration.floor());
-    }
-    if (widget.useRealDuration || _realDuration > 7200) {
-      return Duration(seconds: _realDuration.floor());
-    }
-    return const Duration(hours: 2);
-  }
-  Duration _fakePosition = Duration.zero;
-  double _realDuration = 7200; // Default 2h bis JW Player echte Dauer meldet
-  double _liveEdge = 0; // Für Live-Streams: aktuellster abspielbarer Zeitpunkt
-  bool _isPlaying = false;
-  bool _isInBlackScreen = false;
-  bool _showControls = true;
-  bool _playerReady = false;
-  bool _isTV = false;
-  String _debugMsg = '';
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _isTV = MediaQuery.of(context).size.shortestSide > 450;
-  }
-
-  double _playbackRate = 1.0;
-  DateTime? _lastUserToggle;
-
-  int _seekClickCount = 0; // positiv = vorwärts, negativ = rückwärts
-  int _pendingSeekSeconds = 0;
-  bool _showSeekOverlay = false;
-  String _seekOverlayText = '';
-  Timer? _seekTimer;
-  Timer? _hideControlsTimer;
-  Timer? _positionTimer;
-  Timer? _blackScreenTimer;
-
-  // 1x=10s 2x=30s 3x=1min 4x=3min 5x=5min 6x=10min 7x=20min 8x=30min, danach +30min
-  final List<int> _seekSteps = [10, 30, 60, 180, 300, 600, 1200, 1800];
-
-  // Auto-Retry wenn JW Player nach 15s nicht "ready" gemeldet hat (Netz-Blip etc.)
-  Timer? _initRetryTimer;
-  bool _initRetryDone = false;
-
-  // Erkennen wenn die tv.* Session abgelaufen ist und der Server uns auf
-  // signin.volleyballworld.com (oder eine tv.*/login-Variante) umleitet.
-  // Nur einmal feuern, sonst kommt's beim about:blank in dispose() nochmal.
-  bool _loginRedirectFired = false;
-  void _handleLoginRedirect(String url) {
-    if (_loginRedirectFired) return;
-    _loginRedirectFired = true;
-    debugPrint('[player] session expired, redirected to: $url — closing player');
-    if (mounted && Navigator.canPop(context)) {
-      Navigator.pop(context, 'needs_login');
-    }
-  }
-
-  static bool _isLoginRedirect(String url) {
-    if (url.isEmpty) return false;
-    if (url == 'about:blank') return false;
-    if (url.startsWith('https://signin.volleyballworld.com')) return true;
-    if (url.startsWith('https://tv.volleyballworld.com/login')) return true;
-    return false;
-  }
-
-  void _markPlayerReady() {
-    _initRetryTimer?.cancel();
-    _initRetryTimer = null;
-  }
-
-  void _scheduleInitRetry() {
-    _initRetryTimer?.cancel();
-    _initRetryTimer = Timer(const Duration(seconds: 15), () {
-      if (!mounted || _playerReady || _initRetryDone) return;
-      _initRetryDone = true;
-      debugPrint('[player] initial load timeout — retrying playerUrl');
-      _loadUrl(widget.playerUrl);
-    });
-  }
-
-  bool _handleRemoteKey(KeyEvent event) {
-    if (!mounted || !_playerReady) return false;
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
-
-    final isDown = event is KeyDownEvent;
-
-    // Jede Taste blendet Controls wieder ein
-    if (!_showControls) {
-      setState(() => _showControls = true);
-      _startHideControlsTimer();
-      if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
-          event.logicalKey == LogicalKeyboardKey.arrowDown) {
-        return true;
-      }
-    }
-
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.arrowLeft:
-      case LogicalKeyboardKey.arrowRight:
-        _seek(event.logicalKey == LogicalKeyboardKey.arrowRight);
-        return true;
-      case LogicalKeyboardKey.arrowUp:
-      case LogicalKeyboardKey.arrowDown:
-        return true;
-      case LogicalKeyboardKey.mediaPlayPause:
-      case LogicalKeyboardKey.select:
-      case LogicalKeyboardKey.enter:
-        if (isDown) _togglePlayPause();
-        return true;
-      case LogicalKeyboardKey.mediaFastForward:
-        if (isDown) _changePlaybackRate(true);
-        return true;
-      case LogicalKeyboardKey.mediaRewind:
-        if (isDown) _changePlaybackRate(false);
-        return true;
-    }
-    return false;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    HardwareKeyboard.instance.addHandler(_handleRemoteKey);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-
-    if (!_useInAppWebView) {
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel('FlutterChannel', onMessageReceived: _onJsMessage)
-      ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) {
-          _runJs(r'''
-            (function() {
-              if (window._qualityPatched) return;
-              window._qualityPatched = true;
-
-              try {
-                Object.defineProperty(screen, 'width',  {get: function() { return 1920; }, configurable: true});
-                Object.defineProperty(screen, 'height', {get: function() { return 1080; }, configurable: true});
-                Object.defineProperty(window, 'innerWidth',  {get: function() { return 1920; }, configurable: true});
-                Object.defineProperty(window, 'innerHeight', {get: function() { return 1080; }, configurable: true});
-                Object.defineProperty(window, 'devicePixelRatio', {get: function() { return 1; }, configurable: true});
-              } catch(e) {}
-
-              function _filterM3u8(t) {
-                if (t.indexOf('#EXT-X-STREAM-INF') < 0) return t;
-                var lines = t.split('\n'), best = null, bestBw = -1;
-                for (var i = 0; i < lines.length; i++) {
-                  var ln = lines[i].replace('\r','');
-                  if (ln.indexOf('#EXT-X-STREAM-INF') !== 0) continue;
-                  var m = ln.match(/BANDWIDTH=(\d+)/);
-                  var bw = m ? parseInt(m[1]) : 0, ul = '';
-                  for (var j = i+1; j < lines.length; j++) {
-                    var jl = lines[j].trim();
-                    if (jl && jl[0] !== '#') { ul = jl; break; }
-                  }
-                  if (bw > bestBw) { bestBw = bw; best = {inf: lines[i], url: ul}; }
-                }
-                if (!best) return t;
-                var hdr = [];
-                for (var k = 0; k < lines.length; k++) {
-                  if (lines[k].replace('\r','').indexOf('#EXT-X-STREAM-INF') === 0) break;
-                  hdr.push(lines[k]);
-                }
-                return hdr.join('\n') + '\n' + best.inf + '\n' + best.url + '\n';
-              }
-
-              var _proto = XMLHttpRequest.prototype;
-              var _origOpen = _proto.open;
-              var _rtDesc = Object.getOwnPropertyDescriptor(_proto, 'responseText');
-              var _rDesc  = Object.getOwnPropertyDescriptor(_proto, 'response');
-
-              _proto.open = function(method, url) {
-                this._reqUrl = typeof url === 'string' ? url : '';
-                var res = _origOpen.apply(this, arguments);
-                if (this._reqUrl.indexOf('.m3u8') >= 0) {
-                  var self = this, _filtered = null;
-                  var rtGet = _rtDesc && _rtDesc.get;
-                  var rGet  = _rDesc  && _rDesc.get;
-                  function _get() {
-                    if (_filtered) return _filtered;
-                    try {
-                      var raw = rtGet ? rtGet.call(self) : '';
-                      if (raw && raw.indexOf('#EXT-X-STREAM-INF') >= 0) {
-                        _filtered = _filterM3u8(raw);
-                        return _filtered;
-                      }
-                      return raw || '';
-                    } catch(e) { return ''; }
-                  }
-                  Object.defineProperty(self, 'responseText', {get: _get, configurable: true});
-                  Object.defineProperty(self, 'response', {
-                    get: function() {
-                      if (_filtered) return _filtered;
-                      try {
-                        var raw = rGet ? rGet.call(self) : (rtGet ? rtGet.call(self) : '');
-                        if (raw && typeof raw === 'string' && raw.indexOf('#EXT-X-STREAM-INF') >= 0) {
-                          _filtered = _filterM3u8(raw);
-                          return _filtered;
-                        }
-                        return raw;
-                      } catch(e) { return ''; }
-                    },
-                    configurable: true
-                  });
-                }
-                return res;
-              };
-            })();
-          ''');
-        },
-        onPageFinished: (url) {
-          if (_isLoginRedirect(url)) {
-            _handleLoginRedirect(url);
-            return;
-          }
-          _onPageFinished();
-          // Fallback: nur wenn ready-Event und play-Event nie kommen
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && !_playerReady) {
-              setState(() { _playerReady = true; _isPlaying = true; });
-              _markPlayerReady();
-              _startHideControlsTimer();
-              _startPositionPolling();
-            }
-          });
-        },
-      ));
-
-    // Android: Autoplay VOR loadRequest setzen damit kein Race Condition entsteht
-    if (_controller!.platform is AndroidWebViewController) {
-      (_controller!.platform as AndroidWebViewController)
-          .setMediaPlaybackRequiresUserGesture(false);
-    }
-
-    _loadUrl(widget.playerUrl);
-    } // end if (!_useInAppWebView)
-    _scheduleInitRetry();
-  }
-
-  // Findet das <video>-Element im Hauptframe oder in iframes
-  static const String _jsGetVideo = '''
-    (function() {
-      var v = document.querySelector('video');
-      if (v) return v;
-      var frames = document.querySelectorAll('iframe');
-      for (var i = 0; i < frames.length; i++) {
-        try { var fv = frames[i].contentDocument.querySelector('video'); if (fv) return fv; } catch(e) {}
-      }
-      return null;
-    })()
-  ''';
-
-  void _startPositionPolling() {
-    _positionTimer?.cancel();
-    _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (_isInBlackScreen) return;
-      _runJs('''
-        try {
-          var v = $_jsGetVideo;
-          if (v) {
-            var seekEnd = (v.seekable && v.seekable.length > 0) ? v.seekable.end(v.seekable.length - 1) : (isFinite(v.duration) ? v.duration : 0);
-            FlutterChannel.postMessage(JSON.stringify({
-              type: 'time',
-              pos: v.currentTime,
-              dur: isFinite(v.duration) ? v.duration : seekEnd,
-              seekEnd: seekEnd,
-              state: (window._flutterPaused || v.paused) ? 'paused' : 'playing'
-            }));
-          }
-        } catch(e) {}
-      ''');
-    });
-  }
-
-  void _onPageFinished() {
-    _runJs('''
-      window._flutterPaused = false;
-
-      // Überschreibt v.play() direkt – kein JW Player API-Call, kein UI-Flash
-      function _flutterSetupVideo(v) {
-        if (v._flutterSetup) return;
-        v._flutterSetup = true;
-        var origPlay = v.play.bind(v);
-        v.play = function() {
-          if (window._flutterPaused) return Promise.resolve();
-          return origPlay();
-        };
-        v.addEventListener('play', function() {
-          if (window._flutterPaused) setTimeout(function() { if (window._flutterPaused) v.pause(); }, 0);
-        });
-      }
-
-      window.flutterPause = function() {
-        window._flutterPaused = true;
-        try { var v = $_jsGetVideo; if (v) v.pause(); } catch(e) {}
-      };
-
-      window.flutterPlay = function(rate) {
-        window._flutterPaused = false;
-        try { var v = $_jsGetVideo; if (v) { v.playbackRate = rate; v.play(); } } catch(e) {}
-      };
-
-      // Cookie-Banner automatisch akzeptieren
-      (function() {
-        var selectors = [
-          '#onetrust-accept-btn-handler',
-          '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
-          '.cookie-accept', '.accept-cookies', '[data-testid="cookie-accept"]',
-          'button[class*="accept"]', 'button[class*="Accept"]',
-        ];
-        var texts = ['accept all', 'akzeptieren', 'alle akzeptieren', 'accept'];
-        function tryDismiss() {
-          for (var i = 0; i < selectors.length; i++) {
-            var el = document.querySelector(selectors[i]);
-            if (el) { el.click(); return true; }
-          }
-          var btns = document.querySelectorAll('button');
-          for (var j = 0; j < btns.length; j++) {
-            var t = (btns[j].textContent || '').toLowerCase().trim();
-            for (var k = 0; k < texts.length; k++) {
-              if (t === texts[k] || t.includes(texts[k])) { btns[j].click(); return true; }
-            }
-          }
-          return false;
-        }
-        var attempts = 0;
-        var cookieTimer = setInterval(function() {
-          if (tryDismiss() || attempts++ > 20) clearInterval(cookieTimer);
-        }, 500);
-      })();
-
-      // Autoplay
-      var autoPlay = setInterval(function() {
-        try {
-          var v = $_jsGetVideo;
-          if (v) { _flutterSetupVideo(v); v.play(); clearInterval(autoPlay); }
-        } catch(e) {}
-      }, 100);
-
-
-      // Hebt <video> über alle JW Player UI-Elemente (Titel, Controlbar, Overlays)
-      var _jwCss = [
-        'video{position:fixed!important;top:0!important;left:0!important;',
-        'width:100%!important;height:100%!important;object-fit:contain!important;',
-        'z-index:9999999!important;background:#000!important;pointer-events:none!important;}',
-        'body{background:#000!important;overflow:hidden!important;margin:0!important;padding:0!important;}',
-        '.jw-wrapper>*:not(.jw-media),.jw-title,.jw-display,.jw-controlbar,',
-        '.jw-dock,.jw-logo,.jw-controls,.jw-icon-display,',
-        '.jw-display-icon-container,.jw-nextup-container,.jw-overlays,.jw-preview{',
-        'display:none!important;visibility:hidden!important;',
-        'opacity:0!important;pointer-events:none!important}',
-        '.jw-wrapper{cursor:none!important;background:#000!important;}',
-        '.jw-media{pointer-events:none!important}',
-      ].join('');
-
-      function _suppressDoc(doc) {
-        try {
-          if (!doc || !doc.body) return;
-          if (!doc.head.querySelector('#fl-sup')) {
-            var s = doc.createElement('style');
-            s.id = 'fl-sup';
-            s.textContent = _jwCss;
-            doc.head.appendChild(s);
-          }
-          var sels = ['.jw-title','.jw-display','.jw-controlbar','.jw-dock',
-                      '.jw-logo','.jw-controls','.jw-icon-display',
-                      '.jw-display-icon-container','.jw-nextup-container'];
-          sels.forEach(function(sel) {
-            doc.querySelectorAll(sel).forEach(function(el) {
-              el.style.setProperty('display','none','important');
-              el.style.setProperty('opacity','0','important');
-              el.style.setProperty('visibility','hidden','important');
-            });
-          });
-          var w = doc.querySelector('.jw-wrapper');
-          if (w) Array.from(w.children).forEach(function(c) {
-            if (!c.classList.contains('jw-media')) {
-              c.style.setProperty('display','none','important');
-              c.style.setProperty('opacity','0','important');
-            }
-          });
-        } catch(e) {}
-      }
-
-      function _suppressBodyLevel() {
-        try {
-          var wrapper = document.querySelector('.jw-wrapper');
-          if (!wrapper) return;
-          var pc = wrapper;
-          while (pc.parentElement && pc.parentElement !== document.body) pc = pc.parentElement;
-          Array.from(document.body.children).forEach(function(el) {
-            if (el === pc) return;
-            var t = el.tagName;
-            if (t==='SCRIPT'||t==='STYLE'||t==='LINK'||t==='NOSCRIPT') return;
-            if (el.id && el.id.indexOf('fl-') === 0) return;
-            el.style.setProperty('display','none','important');
-            el.style.setProperty('visibility','hidden','important');
-          });
-        } catch(e) {}
-      }
-
-      // Statt 150ms-Polling: MutationObserver feuert nur bei DOM-Änderungen,
-      // requestAnimationFrame batched mehrere Mutations zu einem Suppress-Run.
-      var _suppressPending = false;
-      function _runSuppress() {
-        _suppressPending = false;
-        _suppressDoc(document);
-        _suppressBodyLevel();
-        document.querySelectorAll('iframe').forEach(function(iframe) {
-          try {
-            var doc = iframe.contentDocument || iframe.contentWindow.document;
-            if (doc && doc.readyState !== 'uninitialized') {
-              _suppressDoc(doc);
-              _attachObserverTo(doc);
-            }
-          } catch(e) {}
-        });
-      }
-      function _scheduleSuppress() {
-        if (_suppressPending) return;
-        _suppressPending = true;
-        (window.requestAnimationFrame || function(cb){setTimeout(cb,16);})(_runSuppress);
-      }
-      function _attachObserverTo(doc) {
-        if (!doc || doc._flObsAttached) return;
-        try {
-          doc._flObsAttached = true;
-          var o = new MutationObserver(_scheduleSuppress);
-          o.observe(doc.documentElement || doc, {
-            childList: true, subtree: true,
-            attributes: true, attributeFilter: ['style','class']
-          });
-        } catch(e) {}
-      }
-      _runSuppress();
-      _attachObserverTo(document);
-      // Iframes können verzögert reinkommen (Cookie-Banner-iframe, Player-iframe etc.)
-      setTimeout(_scheduleSuppress, 500);
-      setTimeout(_scheduleSuppress, 2000);
-      setTimeout(_scheduleSuppress, 5000);
-
-      var _qualityForced = false;
-      function _forceMaxQuality(p) {
-        if (_qualityForced) return;
-        var levels = [];
-        try { levels = p.getQualityLevels(); } catch(e) {}
-        if (!levels || levels.length === 0) return;
-        _qualityForced = true;
-        var bestIdx = 0, bestVal = -1;
-        for (var i = 0; i < levels.length; i++) {
-          var v = (levels[i].bitrate > 0) ? levels[i].bitrate : (levels[i].height || 0);
-          if (v > bestVal) { bestVal = v; bestIdx = i; }
-        }
-        try { p.setCurrentQuality(bestIdx); } catch(e) {}
-      }
-
-      var attempts = 0;
-      var init = setInterval(function() {
-        attempts++;
-        try {
-          var p = jwplayer();
-          if (p && p.getState) {
-            try { var v = $_jsGetVideo; if (v) _flutterSetupVideo(v); } catch(e) {}
-            var _readyHandled = false;
-            function _onPlayerReady() {
-              if (_readyHandled) return;
-              _readyHandled = true;
-              FlutterChannel.postMessage(JSON.stringify({type:'ready', dur: p.getDuration()}));
-              setTimeout(function() {
-                _forceMaxQuality(p);
-                if(window.flShowControls) window.flShowControls();
-                ${widget.seekToLive ? '''
-                try {
-                  var dur = p.getDuration();
-                  if (dur && isFinite(dur) && dur > 10) {
-                    p.seek(Math.max(0, dur - 10));
-                  } else {
-                    var v = $_jsGetVideo;
-                    if (v && v.seekable && v.seekable.length > 0) {
-                      v.currentTime = Math.max(0, v.seekable.end(0) - 5);
-                    }
-                  }
-                } catch(e) {}
-                ''' : widget.isLive ? '''
-                // "Vom Anfang an" Strategie:
-                //   1. Player SOFORT pausieren — JWPlayer kann nur zum Live-Edge
-                //      zurueckschnappen wenn er aktiv buffert. Pause friert
-                //      die Position ein.
-                //   2. Warten bis seekable.length>0 und Range >= 60s (genug DVR
-                //      damit der Seek auch wirklich was bewegt).
-                //   3. Drei Seek-APIs versuchen, dann play() resumen.
-                //   4. Persistenter Watchdog 30s lang als Sicherheitsnetz.
-                function _dbg(m) { try { FlutterChannel.postMessage(JSON.stringify({type:'debug',msg:m})); } catch(e) {} }
-                _dbg('FROM-START INIT');
-                try { p.pause(); } catch(_) {}
-                var _attempts = 0;
-                var _userInteracted = false;
-                var _seekLanded = false;
-                function _doSeek(reason) {
-                  try {
-                    var v = $_jsGetVideo;
-                    if (!v || !v.seekable || v.seekable.length === 0) return false;
-                    var s = v.seekable.start(0);
-                    var e = v.seekable.end(0);
-                    if (e - s < 10) return false;
-                    var dur = 0;
-                    try { dur = p.getDuration() || 0; } catch(_){}
-                    _dbg('SEEK '+reason+' s='+s.toFixed(0)+' e='+e.toFixed(0)+' cur='+v.currentTime.toFixed(0)+' dur='+dur.toFixed(0));
-                    try { p.seek(0); } catch(_){}
-                    try { p.seek(s); } catch(_){}
-                    try { v.currentTime = s; } catch(_){}
-                    return true;
-                  } catch(_) { return false; }
-                }
-                // Phase 1: warten bis seekable verwertbar ist, dann seeken + play
-                var _initIv = setInterval(function() {
-                  _attempts++;
-                  var v = $_jsGetVideo;
-                  if (!v || !v.seekable || v.seekable.length === 0) {
-                    if (_attempts > 80) { clearInterval(_initIv); _dbg('TIMEOUT no seekable after 8s'); try { p.play(); } catch(_){} }
-                    return;
-                  }
-                  var s = v.seekable.start(0);
-                  var e = v.seekable.end(0);
-                  var range = e - s;
-                  if (range < 60) {
-                    if (_attempts % 10 === 0) _dbg('waiting range='+range.toFixed(0)+'s');
-                    if (_attempts > 80) {
-                      clearInterval(_initIv);
-                      _dbg('TIMEOUT range stays '+range.toFixed(0)+'s — seeking anyway');
-                      _doSeek('timeout');
-                      setTimeout(function(){ try { p.play(); } catch(_){} }, 200);
-                    }
-                    return;
-                  }
-                  // Seekable jetzt mit echtem DVR-Window — seek + play
-                  clearInterval(_initIv);
-                  _seekLanded = _doSeek('init');
-                  setTimeout(function() {
-                    try { p.play(); } catch(_){}
-                    _dbg('PLAY resumed cur='+v.currentTime.toFixed(0));
-                  }, 200);
-                }, 100);
-                // Phase 2: 30s Watchdog als Snap-Back-Schutz
-                var _watchAttempts = 0;
-                var _watchdog = setInterval(function() {
-                  _watchAttempts++;
-                  if (_userInteracted) { clearInterval(_watchdog); _dbg('watchdog off (user)'); return; }
-                  if (_watchAttempts > 60) { clearInterval(_watchdog); return; }
-                  try {
-                    var v = $_jsGetVideo;
-                    if (!v || !v.seekable || v.seekable.length === 0) return;
-                    var s = v.seekable.start(0);
-                    var e = v.seekable.end(0);
-                    if (e - s < 10) return;
-                    var cur = v.currentTime;
-                    var posInWindow = (cur - s) / (e - s);
-                    if (posInWindow > 0.5 || (e - cur) < 30) {
-                      _dbg('DRIFT '+(posInWindow*100).toFixed(0)+'% — reseek');
-                      _doSeek('drift');
-                    }
-                  } catch(_) {}
-                }, 500);
-                // User-Interaktion (Pfeiltasten) deaktiviert den Watchdog
-                document.addEventListener('keydown', function(e) {
-                  if (e.keyCode >= 37 && e.keyCode <= 40) _userInteracted = true;
-                }, true);
-                ''' : ''}
-              }, 0);
-            }
-            p.on('ready', _onPlayerReady);
-            // Race condition fix: wenn der Player schon ueber 'idle' hinaus
-            // ist (z.B. wegen warmem Preload), hat 'ready' bereits gefeuert
-            // — der Listener oben verpasst es. Daher Handler hier nochmal
-            // direkt anstossen. Vorher wurde nur eine Flutter-Nachricht
-            // gepostet, der Seek-Code im setTimeout(0) ist nie gelaufen —
-            // genau warum "Vom Anfang an" auf Live-Streams nicht griff.
-            try {
-              var st = p.getState();
-              if (st && st !== 'idle' && st !== 'error') {
-                _onPlayerReady();
-              }
-            } catch(e) {}
-            p.on('levels', function() { _forceMaxQuality(p); });
-            p.on('play',  function() {
-              if (!window._flutterPaused) FlutterChannel.postMessage(JSON.stringify({type:'play'}));
-            });
-            p.on('pause', function() { FlutterChannel.postMessage(JSON.stringify({type:'pause'})); });
-            p.on('time',  function(e) { FlutterChannel.postMessage(JSON.stringify({type:'time', pos: e.position, dur: e.duration})); });
-            p.on('complete', function() { FlutterChannel.postMessage(JSON.stringify({type:'complete'})); });
-            clearInterval(init);
-          }
-        } catch(e) {}
-        if (attempts > 60) clearInterval(init);
-      }, 100);
-
-      // TV-Fernbedienung: D-Pad-Tasten über FlutterChannel weiterleiten
-      document.addEventListener('keydown', function(e) {
-        var map = {
-          37: 'left', 38: 'up', 39: 'right', 40: 'down',
-          13: 'select', 32: 'select',
-          179: 'playPause', 228: 'fastForward', 227: 'rewind',
-          8: 'back', 27: 'back', 166: 'back'
-        };
-        var key = map[e.keyCode];
-        if (key) {
-          try { FlutterChannel.postMessage(JSON.stringify({type:'key', key:key})); } catch(err) {}
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        }
-      }, true);
-    ''');
-  }
-
-  void _handleJsKey(String key) {
-    if (!mounted) return;
-    // Jede Taste blendet Controls ein
-    if (!_showControls) setState(() => _showControls = true);
-    _startHideControlsTimer();
-    if (!_playerReady && key != 'back') return;
-    switch (key) {
-      case 'left':  _seek(false); break;
-      case 'right': _seek(true);  break;
-      case 'up':
-      case 'down':  break;
-      case 'select':
-      case 'playPause': _togglePlayPause(); break;
-      case 'fastForward': _changePlaybackRate(true);  break;
-      case 'rewind':      _changePlaybackRate(false); break;
-      case 'back':
-        if (mounted) _closePlayer();
-        break;
-    }
-  }
-
-  void _onJsMessage(JavaScriptMessage msg) {
-    try {
-      final data = jsonDecode(msg.message);
-      final type = data['type'];
-      if (type == 'ready') {
-        final dur = (data['dur'] ?? 0).toDouble();
-        _startPositionPolling();
-        if (mounted) {
-          setState(() { _playerReady = true; _realDuration = dur; _isPlaying = true; });
-          _markPlayerReady();
-          _startHideControlsTimer();
-          final safeTitle = widget.title.replaceAll("'", "\\'");
-          _runJs("if(window.flSetTitle) window.flSetTitle('$safeTitle');");
-        }
-      } else if (type == 'play') {
-        if (!_playerReady) {
-          // 'ready' might have been missed — unlock controls on first play
-          _startPositionPolling();
-          setState(() { _playerReady = true; _isPlaying = true; });
-          _markPlayerReady();
-          _startHideControlsTimer();
-        } else {
-          setState(() => _isPlaying = true);
-        }
-      } else if (type == 'pause') {
-        setState(() => _isPlaying = false);
-      } else if (type == 'time') {
-        if (!_isInBlackScreen) {
-          final sinceToggle = _lastUserToggle == null
-              ? const Duration(seconds: 99)
-              : DateTime.now().difference(_lastUserToggle!);
-          setState(() {
-            _fakePosition = Duration(milliseconds: ((data['pos'] ?? 0.0) * 1000).toInt());
-            _realDuration = (data['dur'] ?? _realDuration).toDouble();
-            if (widget.isLive && data['seekEnd'] != null) {
-              final se = (data['seekEnd'] as num).toDouble();
-              if (se > 0) _liveEdge = se;
-            }
-            if (sinceToggle.inMilliseconds > 1500) {
-              final state = data['state'] as String?;
-              if (state != null) _isPlaying = state == 'playing';
-            }
-          });
-        }
-      } else if (type == 'key') {
-        _handleJsKey(data['key'] as String? ?? '');
-      } else if (type == 'complete') {
-        if (widget.isLive) {
-          // Live-Stream endet nie künstlich
-        } else if (widget.useRealDuration || _realDuration > 7200) {
-          setState(() => _isPlaying = false);
-        } else {
-          _startBlackScreen();
-        }
-      } else if (type == 'debug') {
-        final msg = data['msg'] as String? ?? '';
-        setState(() => _debugMsg = msg);
-        // Bei Live-Streams 30s anzeigen damit Vom-Anfang-an-Diagnose
-        // tatsaechlich lesbar bleibt (init + seek + drift-Events).
-        final dur = widget.isLive ? const Duration(seconds: 30) : const Duration(seconds: 8);
-        Future.delayed(dur, () {
-          if (mounted && _debugMsg == msg) setState(() => _debugMsg = '');
-        });
-      }
-    } catch (_) {}
-  }
-
-  void _startBlackScreen() {
-    if (_isInBlackScreen) return;
-    setState(() { _isInBlackScreen = true; _isPlaying = true; });
-    _blackScreenTimer?.cancel();
-    _blackScreenTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
-      if (!mounted) { t.cancel(); return; }
-      if (!_isPlaying) return;
-      setState(() {
-        _fakePosition += Duration(milliseconds: (500 * _playbackRate).round());
-        if (_fakePosition >= _effectiveDuration) { _fakePosition = _effectiveDuration; t.cancel(); }
-      });
-    });
-  }
-
-  void _seekToFakePosition(Duration target) {
-    if (target < Duration.zero) target = Duration.zero;
-    if (target > _effectiveDuration) target = _effectiveDuration;
-    final real = _realDuration;
-    final targetSecs = target.inMilliseconds / 1000.0;
-    final wasPlaying = _isPlaying;
-
-    _blackScreenTimer?.cancel();
-
-    if (targetSecs <= real) {
-      setState(() { _isInBlackScreen = false; _fakePosition = target; _isPlaying = wasPlaying; });
-      _runJs('try { var v=$_jsGetVideo; if(v) v.currentTime=$targetSecs; } catch(e) {}');
-      if (wasPlaying) {
-        _runJs('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
-      } else {
-        _runJs('if(window.flutterPause) window.flutterPause();');
-      }
-    } else {
-      _runJs('if(window.flutterPause) window.flutterPause();');
-      setState(() { _isInBlackScreen = true; _fakePosition = target; _isPlaying = wasPlaying; });
-      if (wasPlaying) {
-        _blackScreenTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
-          if (!mounted) { t.cancel(); return; }
-          if (!_isPlaying) return;
-          setState(() {
-            _fakePosition += Duration(milliseconds: (500 * _playbackRate).round());
-            if (_fakePosition >= _effectiveDuration) { _fakePosition = _effectiveDuration; t.cancel(); }
-          });
-        });
-      }
-    }
-  }
-
-  void _togglePlayPause() {
-    final nowPlaying = !_isPlaying;
-    _lastUserToggle = DateTime.now();
-    setState(() {
-      _isPlaying = nowPlaying;
-      if (!nowPlaying && _playbackRate > 1.0) _playbackRate = 1.0;
-    });
-    if (!_isInBlackScreen) {
-      if (nowPlaying) {
-        _runJs('if(window.flutterPlay) window.flutterPlay($_playbackRate);');
-      } else {
-        _runJs('if(window.flutterPause) window.flutterPause();');
-      }
-    }
-    _startHideControlsTimer();
-  }
-
-  void _startHideControlsTimer() {
-    _hideControlsTimer?.cancel();
-    _hideControlsTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _showControls = false);
-    });
-  }
-
-  int _getSeekSeconds(int clicks) {
-    if (clicks <= 0) return 0;
-    if (clicks <= _seekSteps.length) return _seekSteps[clicks - 1];
-    return _seekSteps.last + (clicks - _seekSteps.length) * 600;
-  }
-
-  void _changePlaybackRate(bool faster) {
-    const rates = [1.0, 2.0, 4.0, 8.0];
-    final idx = rates.indexOf(_playbackRate);
-    final nextIdx = (faster ? idx + 1 : idx - 1).clamp(0, rates.length - 1);
-    final next = rates[nextIdx];
-    if (next == _playbackRate) return;
-    setState(() => _playbackRate = next);
-    if (!_isInBlackScreen) {
-      _runJs('try { var v=$_jsGetVideo; if(v) v.playbackRate=$next; } catch(e) {}');
-    }
-    _startHideControlsTimer();
-  }
-
-  void _seek(bool forward) {
-    _seekTimer?.cancel();
-    _seekClickCount += forward ? 1 : -1;
-
-    if (_seekClickCount == 0) {
-      _pendingSeekSeconds = 0;
-      setState(() { _showSeekOverlay = false; });
-      return;
-    }
-
-    final isForward = _seekClickCount > 0;
-    final absCount = _seekClickCount.abs();
-    _pendingSeekSeconds = _getSeekSeconds(absCount);
-    final seekText = '${isForward ? '+' : '-'}${_formatSeekTime(_pendingSeekSeconds)}';
-    setState(() {
-      _showSeekOverlay = true;
-      _showControls = true;
-      _seekOverlayText = seekText;
-    });
-    _runJs("if(window.flShowSeek) window.flShowSeek('$seekText');");
-    _seekTimer = Timer(const Duration(milliseconds: 600), () {
-      final target = isForward
-          ? _fakePosition + Duration(seconds: _pendingSeekSeconds)
-          : _fakePosition - Duration(seconds: _pendingSeekSeconds);
-      _seekToFakePosition(target);
-      _seekClickCount = 0;
-      _pendingSeekSeconds = 0;
-      if (mounted) { setState(() => _showSeekOverlay = false); _startHideControlsTimer(); }
-    });
-  }
-
-  String _formatSeekTime(int s) {
-    if (s < 60) return '${s}s';
-    if (s < 3600) return '${s ~/ 60}min';
-    return '${s ~/ 3600}h ${(s % 3600) ~/ 60}min';
-  }
-
-  String _formatDuration(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return h > 0 ? '$h:$m:$s' : '$m:$s';
-  }
-
-  void _closePlayer() {
-    _runJs(
-      'try{jwplayer().stop();}catch(e){}'
-      'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
-    );
-    _loadUrl('about:blank');
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleRemoteKey);
-    _seekTimer?.cancel();
-    _hideControlsTimer?.cancel();
-    _positionTimer?.cancel();
-    _blackScreenTimer?.cancel();
-    _initRetryTimer?.cancel();
-    try {
-      _runJs(
-        'try{jwplayer().stop();}catch(e){}'
-        'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
-      );
-      _loadUrl('about:blank');
-    } catch (_) {}
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations([]);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        _closePlayer();
-      },
-      child: Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(children: [
-          _buildWebViewWidget(),
-          // Schwarzes Overlay im Black-Screen-Modus
-          if (_isInBlackScreen)
-            Positioned.fill(child: Container(
-              color: Colors.black,
-              child: Center(child: AppVariant.showClubBranding
-                // Vereins-Build: orange Kapsel mit "Powered by" + BVC-Logo.
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
-                    decoration: BoxDecoration(
-                      color: Colors.orange,
-                      borderRadius: BorderRadius.circular(1000),
-                    ),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Text('Powered by',
-                        style: TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 2, fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 20),
-                      GestureDetector(
-                        onTap: () => launchUrl(Uri.parse('https://www.instagram.com/bvc_lustenau/'),
-                            mode: LaunchMode.externalApplication),
-                        child: Image.asset('assets/bvc_logo.png', width: 260),
-                      ),
-                    ]),
-                  )
-                // Neutrale Variante: echter Kreis (BoxShape.circle, feste
-                // Kantenlaenge) statt der Kapsel — die passt sich sonst dem
-                // Inhalt an und wird zum Oval. Darin das App-Logo mit dem
-                // Hinweis darunter. Bewusst die freigestellte Logo-Fassung:
-                // bvctv_logo.png hat KEIN Alpha und wuerde als weisse Flaeche
-                // auf dem Orange kleben.
-                : Builder(builder: (ctx) {
-                    final d = MediaQuery.of(ctx).size.shortestSide * 0.62;
-                    return Container(
-                      width: d,
-                      height: d,
-                      decoration: const BoxDecoration(
-                        color: Colors.orange,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/bvctv_logo_transparent.png',
-                              width: d * 0.5, height: d * 0.5, fit: BoxFit.contain),
-                          SizedBox(height: d * 0.03),
-                          Text(S.blackScreenHint,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.black.withValues(alpha: 0.55),
-                              fontSize: d * 0.062,
-                              fontWeight: FontWeight.bold,
-                            )),
-                        ],
-                      ),
-                    );
-                  }),
-              ),
-            )),
-
-          // Schwarze Abdeckung bis Player bereit ist
-          if (!_playerReady)
-            Positioned.fill(child: Container(
-              color: Colors.black,
-              child: const Center(child: CircularProgressIndicator(color: Colors.orange)),
-            )),
-
-          // Debug-Overlay
-          if (_debugMsg.isNotEmpty)
-            Positioned(top: 20, left: 10, right: 10, child: Container(
-              color: Colors.black87,
-              padding: const EdgeInsets.all(8),
-              child: Text(_debugMsg, style: const TextStyle(color: Colors.yellow, fontSize: 11), maxLines: 5),
-            )),
-
-          // Vollflächige Touch-Overlay: links=zurück, rechts=vor
-          // Erster Tap blendet Controls ein, erst weiterer Tap seeked
-          if (_playerReady)
-            Positioned.fill(child: Row(children: [
-              Expanded(child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  if (!_showControls) {
-                    setState(() => _showControls = true);
-                    _startHideControlsTimer();
-                  } else {
-                    _seek(false);
-                  }
-                },
-                child: const SizedBox.expand(),
-              )),
-              Expanded(child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  if (!_showControls) {
-                    setState(() => _showControls = true);
-                    _startHideControlsTimer();
-                  } else {
-                    _seek(true);
-                  }
-                },
-                child: const SizedBox.expand(),
-              )),
-            ])),
-
-          // Seek-Overlay
-          if (_showSeekOverlay) Center(child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-            decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(12)),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(_seekClickCount >= 0 ? Icons.fast_forward : Icons.fast_rewind, color: Colors.orange, size: 48),
-              const SizedBox(height: 8),
-              Text(_seekOverlayText, style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-              Text(S.tapCount(_seekClickCount.abs()), style: const TextStyle(color: Colors.white54, fontSize: 14)),
-            ]),
-          )),
-
-          // Controls ein/ausblenden per Tap auf die Mitte (wo keine Seek-Bereiche sind)
-          if (_showControls) _buildControls(),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildWebViewWidget() {
-    if (_useInAppWebView) {
-      final tokenEscaped = widget.accessToken.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
-      return InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri(widget.playerUrl)),
-        initialUserScripts: UnmodifiableListView([
-          UserScript(
-            source: '''
-              (function() {
-                // Token vor jeder Seiten-JS in localStorage setzen — verhindert,
-                // dass tv.volleyballworld.com/player seinen eigenen Login zeigt.
-                try {
-                  localStorage.setItem("quick-bricky-login-flow.access_token", "$tokenEscaped");
-                } catch(e) {}
-                window.FlutterChannel = {
-                  postMessage: function(msg) {
-                    try { window.flutter_inappwebview.callHandler('FlutterChannel', msg); } catch(e) {}
-                  }
-                };
-              })();
-            ''',
-            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-          ),
-        ]),
-        initialSettings: InAppWebViewSettings(
-          mediaPlaybackRequiresUserGesture: false,
-          allowsInlineMediaPlayback: true,
-          javaScriptEnabled: true,
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        ),
-        onWebViewCreated: (controller) async {
-          _inAppController = controller;
-          debugPrint('[bvctv-player] created. tokenLen=${widget.accessToken.length} url=${widget.playerUrl}');
-          final cm = CookieManager.instance();
-          final signinCookies = await cm.getCookies(url: WebUri('https://signin.volleyballworld.com'));
-          final tvCookies = await cm.getCookies(url: WebUri('https://tv.volleyballworld.com'));
-          debugPrint('[bvctv-player] cookies signin: ${signinCookies.map((c) => c.name).toList()}');
-          debugPrint('[bvctv-player] cookies tv: ${tvCookies.map((c) => c.name).toList()}');
-          controller.addJavaScriptHandler(
-            handlerName: 'FlutterChannel',
-            callback: (args) {
-              if (args.isNotEmpty) _onJsMessage(JavaScriptMessage(message: args[0].toString()));
-            },
-          );
-        },
-        onLoadStart: (_, url) {
-          debugPrint('[bvctv-player] onLoadStart: $url');
-        },
-        onConsoleMessage: (_, msg) {
-          debugPrint('[bvctv-player] console.${msg.messageLevel}: ${msg.message}');
-        },
-        shouldOverrideUrlLoading: (controller, action) async {
-          final url = action.request.url?.toString() ?? '';
-          debugPrint('[bvctv-player] nav: $url');
-          return NavigationActionPolicy.ALLOW;
-        },
-        onLoadStop: (controller, url) async {
-          final urlStr = url?.toString() ?? '';
-          debugPrint('[bvctv-player] onLoadStop: $urlStr');
-          if (_isLoginRedirect(urlStr)) {
-            _handleLoginRedirect(urlStr);
-            return;
-          }
-          final ls = await controller.evaluateJavascript(source: 'JSON.stringify(Object.keys(localStorage))');
-          debugPrint('[bvctv-player] localStorage keys: $ls');
-          _onPageFinished();
-          Future.delayed(const Duration(seconds: 4), () {
-            if (mounted && !_playerReady) {
-              setState(() { _playerReady = true; _isPlaying = true; });
-              _markPlayerReady();
-              _startHideControlsTimer();
-              _startPositionPolling();
-            }
-          });
-        },
-      );
-    }
-    if (_controller!.platform is AndroidWebViewController) {
-      return WebViewWidget.fromPlatformCreationParams(
-        params: AndroidWebViewWidgetCreationParams(
-          controller: _controller!.platform as AndroidWebViewController,
-          displayWithHybridComposition: true,
-          gestureRecognizers: {
-            Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
-          },
-        ),
-      );
-    }
-    return WebViewWidget(
-      controller: _controller!,
-      gestureRecognizers: {
-        Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
-      },
-    );
-  }
-
-  Widget _buildLiveTimeDisplay() {
-    final edge = _liveEdge > 0 ? _liveEdge : _realDuration;
-    final pos = _fakePosition.inSeconds.toDouble();
-    final behind = (edge - pos).clamp(0.0, double.infinity);
-    final isAtLive = behind < 15;
-    if (isAtLive) {
-      return Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)),
-          child: const Text('● LIVE', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-        ),
-      ]);
-    }
-    if (_liveEdge <= 0) return const SizedBox.shrink();
-    return Text('−${_formatDuration(Duration(seconds: behind.toInt()))} ${S.behindLive}',
-        style: const TextStyle(color: Colors.white70, fontSize: 13));
-  }
-
-  Widget _buildControls() {
-    final progress = (_fakePosition.inMilliseconds / _effectiveDuration.inMilliseconds).clamp(0.0, 1.0);
-    return Stack(children: [
-      // Obere Leiste: Gradient + Zurück-Button + Titel
-      Positioned(
-        top: 0, left: 0, right: 0,
-        child: Container(
-          decoration: const BoxDecoration(gradient: LinearGradient(
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [Colors.black87, Colors.transparent],
-          )),
-          padding: const EdgeInsets.all(16),
-          child: Row(children: [
-            IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
-            const SizedBox(width: 8),
-            Expanded(child: Text(widget.title,
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis)),
-          ]),
-        ),
-      ),
-      // Untere Leiste: Gradient + Slider + Buttons
-      Positioned(
-        bottom: 0, left: 0, right: 0,
-        child: Container(
-          decoration: const BoxDecoration(gradient: LinearGradient(
-            begin: Alignment.bottomCenter, end: Alignment.topCenter,
-            colors: [Colors.black87, Colors.transparent],
-          )),
-          padding: const EdgeInsets.fromLTRB(16, 32, 16, 16),
-          child: Column(children: [
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-                activeTrackColor: Colors.orange, inactiveTrackColor: Colors.white24, thumbColor: Colors.orange,
-              ),
-              child: Slider(
-                value: progress,
-                onChanged: (v) { _seekToFakePosition(_effectiveDuration * v); _startHideControlsTimer(); },
-              ),
-            ),
-            Row(children: [
-              if (widget.isLive) _buildLiveTimeDisplay()
-              else Text('${_formatDuration(_fakePosition)} / ${_formatDuration(_effectiveDuration)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              const Spacer(),
-              if (!_isTV) ...[
-                if (_playbackRate > 1.0)
-                  IconButton(
-                    icon: const Icon(Icons.fast_rewind, color: Colors.white, size: 36),
-                    onPressed: () => _changePlaybackRate(false),
-                  )
-                else
-                  const SizedBox(width: 48),
-              ],
-              IconButton(
-                icon: Icon(_isPlaying ? Icons.pause_circle : Icons.play_circle, color: Colors.orange, size: 56),
-                onPressed: _togglePlayPause,
-              ),
-              if (!_isTV)
-                IconButton(
-                  icon: Icon(Icons.fast_forward,
-                      color: _playbackRate >= 8.0 ? Colors.white38 : Colors.white, size: 36),
-                  onPressed: () => _changePlaybackRate(true),
-                ),
-              const Spacer(),
-              if (_playbackRate > 1.0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '${_playbackRate.toStringAsFixed(0)}×',
-                    style: const TextStyle(color: Colors.black, fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                )
-              else if (!_isTV)
-                const SizedBox(width: 44),
-            ]),
-          ]),
-        ),
-      ),
-    ]);
-  }
-}
-

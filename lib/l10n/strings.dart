@@ -63,6 +63,10 @@ class S {
   static String get opensYouTube => isEn ? 'Opens YouTube app' : 'Öffnet YouTube-App';
   static String get spoilerActive =>
       isEn ? 'Spoiler protection active' : 'Spoiler-Schutz aktiv';
+  /// Erscheint nur auf der FOKUSSIERTEN Spoiler-Karte — sonst waere die
+  /// Kachelwand noch voller Text.
+  static String get spoilerRevealHint =>
+      isEn ? 'Hold OK to reveal' : 'OK halten zum Aufdecken';
 
   // Update dialog
   static String downloadProgress(int pct) => isEn ? '$pct% downloaded…' : '$pct% heruntergeladen…';

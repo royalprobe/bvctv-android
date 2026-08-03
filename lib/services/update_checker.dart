@@ -101,6 +101,11 @@ class UpdateChecker {
     }
   }
 
+  /// Semver-Vergleich der Versionsnamen. Public, damit die Vergleichslogik
+  /// ohne Netzwerk testbar ist — "1.0.9" < "1.0.10" faellt bei einem
+  /// String-Vergleich sonst still auf die Nase.
+  static bool isNewer(String remote, String current) => _isNewer(remote, current);
+
   static bool _isNewer(String remote, String current) {
     List<int> parts(String v) =>
         v.split('.').map((p) => int.tryParse(p) ?? 0).toList();

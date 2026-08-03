@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 ///
 /// Datenquelle: https://www.laola1.at/de/tvthek/livestreams/
 /// Server-rendered HTML, jeder Live-Eintrag ist ein Link der Form
-///   /de/video/player/<ID>/<slug>/
+///   `/de/video/player/<ID>/<slug>/`
 /// Beispiel:
 ///   /de/video/player/2173012/win2day-pro-masters-innsbruck---center-court/
 ///
@@ -39,10 +39,9 @@ class LaolaLivestreamScraper {
   static final RegExp _slugRe = RegExp(
       r'(?:^|-)pro-(masters|open|tour)-([a-z0-9]+(?:-[a-z0-9]+)*?)-{2,3}(.+?)-?$');
 
-  /// Liefert eine Liste von Tournament-Maps in dem gleichen Format wie die
-  /// hardcoded `_laolaTournamentData`-Tabelle in home_screen.dart, sodass
-  /// die Treffer direkt in den bestehenden Render-Pfad eingefuegt werden
-  /// koennen.
+  /// Liefert eine Liste von Tournament-Maps im Format, das der Render-Pfad in
+  /// home_screen.dart erwartet (`_scrapedLaolaTournaments`). Das ist seit dem
+  /// Wegfall der hartcodierten Turnier-Tabelle die einzige Laola-Quelle.
   ///
   /// Returns leere Liste bei Netzfehler / parse-Fehler — KEIN throw, der
   /// Scraper ist Best-Effort und darf den Caller nie kaputtmachen.
@@ -66,8 +65,11 @@ class LaolaLivestreamScraper {
     }
   }
 
-  /// Public fuer Unit-Tests / lokales Debugging: parsed direkt aus einem
-  /// HTML-String. Kein Netz, kein I/O.
+  /// Parst direkt aus einem HTML-String — kein Netz, kein I/O. Genau der
+  /// Pfad, den findBeachTournaments nach dem Download nimmt, deshalb der
+  /// Ansatzpunkt fuer Unit-Tests.
+  static List<Map<String, Object>> parseHtml(String html) => _parse(html);
+
   ///
   /// WICHTIG: dedupe NICHT auf eine ID pro (location, courtSlug) — laola1
   /// vergibt pro Court mehrere Player-IDs im Tagesverlauf (eine pro Match-

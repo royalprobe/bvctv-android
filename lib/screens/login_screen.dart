@@ -23,7 +23,6 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  bool _isLoading = true;
   String? _errorMessage;
 
   @override
@@ -143,7 +142,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _login() async {
     setState(() {
-      _isLoading = true;
       _errorMessage = null;
     });
 
@@ -165,7 +163,6 @@ class _LoginScreenState extends State<LoginScreen> {
       if (entered == null) {
         if (mounted) {
           setState(() {
-            _isLoading = false;
             _errorMessage = S.loginCancelled;
           });
         }
@@ -224,7 +221,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (code == null) {
       setState(() {
-        _isLoading = false;
         _errorMessage = S.loginCancelled;
       });
       return;
@@ -286,7 +282,6 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
     }
-    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
@@ -352,8 +347,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
   double _speed = 5.0;
   static const double _minSpeed = 5.0;
   static const double _maxSpeed = 42.0;
-
-  static const _touchChannel = MethodChannel('bvctv/touch');
 
   static const _initScript = r'''
 (function () {
@@ -446,23 +439,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
 ''';
   }
 
-  // Returns JSON: {isInput, type, value, placeholder}
-  static const _checkInputScript = '''
-(function(){
-  var el = document.activeElement;
-  if(!el) return '{"isInput":false}';
-  var t = el.tagName;
-  if(t==='INPUT'||t==='TEXTAREA'){
-    return JSON.stringify({
-      isInput:true,
-      type: el.type||'text',
-      value: el.value||'',
-      placeholder: el.placeholder||''
-    });
-  }
-  return '{"isInput":false}';
-})()
-''';
 
   bool _handleKeyEvent(KeyEvent event) {
     final key = event.logicalKey;
@@ -629,16 +605,6 @@ class _AuthWebViewScreenState extends State<_AuthWebViewScreen> {
     _speed = _minSpeed;
   }
 
-  Future<void> _injectNativeTouch() async {
-    final box = _stackKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final stackOffset = box.localToGlobal(Offset.zero);
-    final absX = stackOffset.dx + _cursorX;
-    final absY = stackOffset.dy + _cursorY;
-    try {
-      await _touchChannel.invokeMethod('tap', {'x': absX, 'y': absY});
-    } catch (_) {}
-  }
 
   @override
   void initState() {

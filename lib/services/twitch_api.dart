@@ -160,7 +160,7 @@ class TwitchStream {
   static const _clientId = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
   static const _usherBase = 'https://usher.ttvnw.net';
 
-  /// videoId ist entweder eine numerische VOD-ID oder "live-<login>".
+  /// videoId ist entweder eine numerische VOD-ID oder `live-<login>`.
   /// Liefert die signed usher.ttvnw.net-Master-m3u8 URL, oder null bei
   /// Netz-/API-Fehler.
   static Future<String?> extractMasterUrl(String videoId) async {
