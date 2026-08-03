@@ -63,7 +63,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _errorMessage;
   int _videosLoadEpoch = 0;
   String _genderFilter = 'all';
-  String _currentPlaylistId = 'QN15YAsv';
+  /// Leer bis _loadTournamentList das neueste Turnier ermittelt hat. Bewusst
+  /// KEINE echte Playlist-ID als Default: die wuerde hier sonst mit dem
+  /// ermittelten Turnier zusammenfallen koennen, needsReload waere false und
+  /// der erste Ladevorgang wuerde nie ausgeloest — Ladescreen ohne Ende.
+  /// _videoRefreshTimer prueft auf isEmpty und laeuft solange nicht.
+  String _currentPlaylistId = '';
   List<Map<String, String>> _availableTournaments = [];
   bool _isLoadingTournaments = true;
   String? _playerFilter;
@@ -1292,15 +1297,15 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Erste Playlist SOFORT laden, ohne auf Titel aller anderen zu warten
-      final firstId = cgPlaylistIds.first;
-      if (mounted) {
-        setState(() {
-          _availableTournaments = [{'id': firstId, 'title': '…'}, ...virtualEntries];
-          _currentPlaylistId = firstId;
-        });
-        _loadVideos(firstId);
-      }
+      // BEWUSST kein Vorab-Laden der ersten Playlist. Das gab es hier mal
+      // ("erste Playlist SOFORT laden, ohne auf die Titel aller anderen zu
+      // warten"), war aber irrefuehrend: cgPlaylistIds.first ist
+      // "Challenge I 2026" — eine Playlist aus reinen YouTube-Links. Beim
+      // Start standen also erst die Challenge-Turniere da und wurden Sekunden
+      // spaeter vom tatsaechlich neuesten Turnier ersetzt. Welches das ist,
+      // weiss man erst nach dem Sortieren (das Datum steckt in den Titel-
+      // Requests, und das aktuellste Turnier kommt sogar aus der Bridge).
+      // Bis dahin bleibt _isLoading true und der Ladescreen stehen.
 
       // Titel + match_date + competition_item des neuesten Items holen –
       // 3072 Bytes reichen sicher (match_date liegt bei ~1900-2000 Bytes;
@@ -2018,6 +2023,11 @@ class _HomeScreenState extends State<HomeScreen> {
     bool forceRefresh = false,
   ]) async {
     final pid = playlistId ?? _currentPlaylistId;
+    // Vor dem ersten _loadTournamentList steht noch kein Turnier fest, es gibt
+    // also nichts zu laden. Erreichbar ueber den Aktualisieren-Button, der
+    // waehrend des Starts schon da ist. _isLoading bleibt auf seinem
+    // Startwert true, der Ladescreen also stehen.
+    if (pid.isEmpty) return;
     // Jeder explizite Ladevorgang macht die noch laufenden ungueltig. Ohne das
     // hier wurde die Epoche NUR in _loadTournamentList erhoeht, ein
     // Turnierwechsel also nie: ein langsamer Ladevorgang (die Aggregation holt
