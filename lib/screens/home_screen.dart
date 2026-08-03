@@ -89,7 +89,41 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _spoilerRounds = {'Final', 'Semifinal', '3rd Place'};
   bool _isSpoiler(String round) => _spoilerFree && _spoilerRounds.contains(round);
 
+  // ── Abgeleitete Listen, memoisiert ──────────────────────────────────────
+  // Diese vier Getter liefen bei JEDEM build() komplett neu. In "Alle
+  // Turniere" stecken ueber 2000 Videos, und _filteredVideos wurde von
+  // GridView.builder sogar pro Kachel aufgerufen (einmal fuer itemCount,
+  // einmal je itemBuilder) — jedes Mal inklusive Sortierung der ganzen Liste.
+  // _availablePlayers und _availableCountries laufen zusaetzlich pro Video
+  // durch mehrere Regex-Operationen und werden dreimal je build abgefragt.
+  // Zusammen mit dem setState aus _startPreload (300ms nach jedem Fokus)
+  // war die Kachel-Navigation auf dem Fire Stick dadurch spuerbar stockend.
+  //
+  // Die Quelllisten werden nie mutiert, sondern immer komplett ersetzt —
+  // Identitaet genuegt daher als Cache-Schluessel. Der Minutenbucket haelt die
+  // zeitabhaengigen Anteile (isLive/isUpcoming) frisch.
+  List<VideoItem>? _allVideosCache;
+  Object? _allVideosKey;
+  List<VideoItem>? _filteredCache;
+  Object? _filteredKey;
+  List<String>? _playersCache;
+  Object? _playersKey;
+  List<String>? _countriesCache;
+  Object? _countriesKey;
+
+  int get _minuteBucket =>
+      DateTime.now().millisecondsSinceEpoch ~/ Duration.millisecondsPerMinute;
+
   List<VideoItem> get _allVideos {
+    final key = (_videos, _liveVideos, _sourceVbw, _sourceLaola, _sourceTwitch);
+    final cached = _allVideosCache;
+    if (cached != null && _allVideosKey == key) return cached;
+    final result = _computeAllVideos();
+    _allVideosKey = key;
+    return _allVideosCache = result;
+  }
+
+  List<VideoItem> _computeAllVideos() {
     final liveIds = _liveVideos.map((v) => v.id).toSet();
     final merged = [..._liveVideos, ..._videos.where((v) => !liveIds.contains(v.id))];
     // Source-Filter: _liveVideos wird nur alle 60s neu befuellt
@@ -105,31 +139,59 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<String> get _availableCountries {
+    final all = _allVideos;
+    final key = (all, _genderFilter);
+    final cached = _countriesCache;
+    if (cached != null && _countriesKey == key) return cached;
+    final result = _computeCountries(all);
+    _countriesKey = key;
+    return _countriesCache = result;
+  }
+
+  /// Die Regexes hier waren vorher pro Video neu kompiliert — bei ueber 2000
+  /// Videos macht das einen messbaren Unterschied.
+  static final RegExp _countryRe = RegExp(r'\(([A-Z]{2,3})\)');
+  static final RegExp _teamSplitRe = RegExp(r'\s+v(?:s)?\s+');
+  static final RegExp _trailingCountryRe = RegExp(r'\s*\([A-Z]{2,3}\)\s*$');
+
+  List<String> _computeCountries(List<VideoItem> allVideos) {
     final countries = <String>{};
-    final source = _genderFilter == 'men'
-        ? _allVideos.where((v) => v.gender == 'Men')
-        : _genderFilter == 'women'
-            ? _allVideos.where((v) => v.gender == 'Women')
-            : _allVideos;
-    for (final v in source) {
-      for (final m in RegExp(r'\(([A-Z]{2,3})\)').allMatches(v.teams)) {
+    for (final v in _byGender(allVideos)) {
+      for (final m in _countryRe.allMatches(v.teams)) {
         countries.add(m.group(1)!);
       }
     }
     return countries.toList()..sort();
   }
 
+  /// Gender-Filter als eine Stelle statt dreimal derselben Verschachtelung.
+  Iterable<VideoItem> _byGender(List<VideoItem> videos) {
+    switch (_genderFilter) {
+      case 'men':
+        return videos.where((v) => v.gender == 'Men');
+      case 'women':
+        return videos.where((v) => v.gender == 'Women');
+      default:
+        return videos;
+    }
+  }
+
   List<String> get _availablePlayers {
+    final all = _allVideos;
+    final key = (all, _genderFilter);
+    final cached = _playersCache;
+    if (cached != null && _playersKey == key) return cached;
+    final result = _computePlayers(all);
+    _playersKey = key;
+    return _playersCache = result;
+  }
+
+  List<String> _computePlayers(List<VideoItem> allVideos) {
     final players = <String>{};
-    final source = _genderFilter == 'men'
-        ? _allVideos.where((v) => v.gender == 'Men')
-        : _genderFilter == 'women'
-            ? _allVideos.where((v) => v.gender == 'Women')
-            : _allVideos;
-    for (final v in source) {
-      final teamParts = v.teams.split(RegExp(r'\s+v(?:s)?\s+'));
+    for (final v in _byGender(allVideos)) {
+      final teamParts = v.teams.split(_teamSplitRe);
       for (final team in teamParts) {
-        final cleaned = team.replaceAll(RegExp(r'\s*\([A-Z]{2,3}\)\s*$'), '').trim();
+        final cleaned = team.replaceAll(_trailingCountryRe, '').trim();
         for (final player in cleaned.split('/')) {
           final p = player.trim();
           if (p.isNotEmpty && p.length > 1) players.add(p);
@@ -140,17 +202,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<VideoItem> get _filteredVideos {
-    var videos = _allVideos.where((v) => v.isLive || !v.isUpcoming).toList();
-    if (_genderFilter == 'men') videos = videos.where((v) => v.gender == 'Men').toList();
-    if (_genderFilter == 'women') videos = videos.where((v) => v.gender == 'Women').toList();
-    if (_playerFilter != null) {
-      final pf = _playerFilter!;
-      videos = videos.where((v) => v.teams.contains(pf)).toList();
-    }
-    if (_countryFilter != null) {
-      final cf = '($_countryFilter)';
-      videos = videos.where((v) => v.teams.contains(cf)).toList();
-    }
+    final all = _allVideos;
+    // Der Minutenbucket ist hier drin, weil isLive/isUpcoming von der Uhrzeit
+    // abhaengen: ein angesetztes Match muss auftauchen sobald es laeuft, auch
+    // wenn sich sonst nichts geaendert hat.
+    final key = (all, _genderFilter, _playerFilter, _countryFilter, _minuteBucket);
+    final cached = _filteredCache;
+    if (cached != null && _filteredKey == key) return cached;
+    final result = _computeFilteredVideos(all);
+    _filteredKey = key;
+    return _filteredCache = result;
+  }
+
+  List<VideoItem> _computeFilteredVideos(List<VideoItem> allVideos) {
+    // Ein Durchlauf statt bis zu vier Zwischenlisten. Bei ueber 2000 Videos
+    // waren das vorher vier volle Kopien pro Aufruf.
+    final pf = _playerFilter;
+    final cf = _countryFilter != null ? '($_countryFilter)' : null;
+    final videos = _byGender(allVideos)
+        .where((v) => v.isLive || !v.isUpcoming)
+        .where((v) => pf == null || v.teams.contains(pf))
+        .where((v) => cf == null || v.teams.contains(cf))
+        .toList();
     // LIVE first, then upcoming, then rest (already sorted by date)
     videos.sort((a, b) {
       if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
@@ -3287,6 +3360,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         : _isLoading
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : LayoutBuilder(builder: (context, constraints) {
+                            // Einmal pro Layout holen, nicht pro Kachel. Der
+                            // Getter ist inzwischen memoisiert, aber so ist es
+                            // auch ohne Cache O(1) je Kachel.
+                            final videos = _filteredVideos;
                             final isTV = constraints.maxWidth > 900 || constraints.maxHeight > 900;
                             final crossAxisCount = isTV ? 5 : 2;
                             const spacing = 10.0;
@@ -3318,8 +3395,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: GridView.builder(
                                 padding: const EdgeInsets.all(pad),
                                 gridDelegate: gridDelegate,
-                                itemCount: _filteredVideos.length,
-                                itemBuilder: (_, i) => _buildVideoCard(_filteredVideos[i]),
+                                itemCount: videos.length,
+                                itemBuilder: (_, i) => _buildVideoCard(videos[i]),
                               ),
                             );
                           }),
