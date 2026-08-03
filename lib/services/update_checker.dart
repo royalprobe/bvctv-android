@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import '../app_variant.dart';
 
 class UpdateInfo {
   final String versionName;
@@ -43,8 +44,17 @@ class UpdateChecker {
 
       if (!_isNewer(tag, current)) return null;
 
+      // Am Release haengen die APKs BEIDER Varianten. Nur das Asset der
+      // eigenen Variante ziehen — sonst wuerde sich die neutrale Variante
+      // beim ersten Update in die gebrandete verwandeln (und umgekehrt).
+      // 'bvctv-v' matcht dabei nicht 'bvctv-neutral-v', die Praefixe sind
+      // ueberschneidungsfrei.
       final assets = (data['assets'] as List? ?? []).cast<Map<String, dynamic>>();
-      final apk = assets.where((a) => (a['name'] as String).endsWith('.apk')).firstOrNull;
+      final apk = assets
+          .where((a) =>
+              (a['name'] as String).startsWith(AppVariant.updateAssetPrefix) &&
+              (a['name'] as String).endsWith('.apk'))
+          .firstOrNull;
       if (apk == null) return null;
 
       return UpdateInfo(

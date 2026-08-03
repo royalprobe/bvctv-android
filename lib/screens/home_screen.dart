@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
 import '../l10n/app_language.dart';
+import '../app_variant.dart';
 import '../l10n/strings.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'login_screen.dart';
@@ -242,6 +243,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// User soll seinen aktuellen Video-Stream nicht durch einen Hintergrund-
   /// Refresh verlieren.
   Future<void> _scrapeLaolaLivestreams() async {
+    // Neutrale Variante zeigt nur VBTV — der Scrape waere reiner Netz-Traffic
+    // fuer Eintraege, die _visibleTournaments ohnehin sofort wegfiltert.
+    // Greift fuer beide Aufrufer (Start-Delay und Aktualisieren-Button).
+    if (AppVariant.vbtvOnly) return;
     final scraped = await LaolaLivestreamScraper.findBeachTournaments();
     if (!mounted || scraped.isEmpty) return;
 
@@ -412,9 +417,13 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _twoHourMode = th != 'false';
         _spoilerFree = sf != 'false';
-        _sourceVbw = sv != 'false';
-        _sourceLaola = sl != 'false';
-        _sourceTwitch = st != 'false';
+        // Neutrale Variante: Quellen hart auf VBTV, gespeicherte Werte werden
+        // ignoriert. Sonst koennte ein alter source_laola=true-Eintrag aus dem
+        // Storage Laola-Inhalte einblenden, obwohl es keine Chips mehr gibt
+        // mit denen der User sie wieder abschalten koennte.
+        _sourceVbw = AppVariant.vbtvOnly ? true : sv != 'false';
+        _sourceLaola = AppVariant.vbtvOnly ? false : sl != 'false';
+        _sourceTwitch = AppVariant.vbtvOnly ? false : st != 'false';
       });
     }
   }
@@ -1297,9 +1306,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final virtualEntries = _virtualTournamentData
           .map((vt) => {'id': vt['id'] as String, 'title': vt['title'] as String})
           .toList();
-      final laolaFallbackEntries = _laolaTournamentData
-          .map((lt) => {'id': lt['id'] as String, 'title': lt['title'] as String})
-          .toList();
+      final laolaFallbackEntries = AppVariant.vbtvOnly
+          ? const <Map<String, String>>[]
+          : _laolaTournamentData
+              .map((lt) =>
+                  {'id': lt['id'] as String, 'title': lt['title'] as String})
+              .toList();
 
       if (cgPlaylistIds.isEmpty) {
         // Kein API-Ergebnis → sofort Laola1 + virtuelle Turniere zeigen
@@ -1378,16 +1390,19 @@ class _HomeScreenState extends State<HomeScreen> {
       })).then((r) => r.whereType<Map<String, String>>().toList());
 
       // Dynamische Laola1-Listen (HTML-Scrape) parallel laden – Tour Pro etc.
-      final laolaDynamicF = Future.wait(_laolaDynamicPlaylists.map((config) async {
-        final data = await _fetchLaolaList(config);
-        if (data == null) return null;
-        _laolaListCache[config['id']!] = data;
-        return <String, String>{
-          'id': config['id']!,
-          'title': data['title'] as String,
-          'matchDate': data['sortDate'] as String,
-        };
-      })).then((r) => r.whereType<Map<String, String>>().toList());
+      // In der neutralen Variante komplett uebersprungen (siehe AppVariant).
+      final laolaDynamicF = AppVariant.vbtvOnly
+          ? Future.value(const <Map<String, String>>[])
+          : Future.wait(_laolaDynamicPlaylists.map((config) async {
+              final data = await _fetchLaolaList(config);
+              if (data == null) return null;
+              _laolaListCache[config['id']!] = data;
+              return <String, String>{
+                'id': config['id']!,
+                'title': data['title'] as String,
+                'matchDate': data['sortDate'] as String,
+              };
+            })).then((r) => r.whereType<Map<String, String>>().toList());
 
       // VBW-Bridge: Homepage nach Replays scrapen, die zu einem competition_item
       // gehören welches noch nicht durch eine offizielle Playlist abgedeckt
@@ -1403,19 +1418,21 @@ class _HomeScreenState extends State<HomeScreen> {
       // Laola1-Turniere: pro Tournament gegen /access/hls checken welche
       // Streams gerade live sind. Tournaments mit 0 verfügbaren Streams gar
       // nicht in die Liste aufnehmen. Cache wird in _loadVideos wiederverwendet.
-      final laolaTournamentsF = Future.wait(_laolaTournamentData.map((lt) async {
-        final tournId = lt['id'] as String;
-        final videos = (lt['videos'] as List).cast<Map<String, String>>();
-        final ids = videos.map((v) => v['id']!).toList();
-        final avail = await _fetchLaolaAvailability(ids);
-        _laolaAvailCache[tournId] = avail;
-        if (!avail.values.any((v) => v)) return null;
-        return <String, String>{
-          'id': tournId,
-          'title': lt['title'] as String,
-          'matchDate': lt['matchDate'] as String,
-        };
-      })).then((r) => r.whereType<Map<String, String>>().toList());
+      final laolaTournamentsF = AppVariant.vbtvOnly
+          ? Future.value(const <Map<String, String>>[])
+          : Future.wait(_laolaTournamentData.map((lt) async {
+              final tournId = lt['id'] as String;
+              final videos = (lt['videos'] as List).cast<Map<String, String>>();
+              final ids = videos.map((v) => v['id']!).toList();
+              final avail = await _fetchLaolaAvailability(ids);
+              _laolaAvailCache[tournId] = avail;
+              if (!avail.values.any((v) => v)) return null;
+              return <String, String>{
+                'id': tournId,
+                'title': lt['title'] as String,
+                'matchDate': lt['matchDate'] as String,
+              };
+            })).then((r) => r.whereType<Map<String, String>>().toList());
 
       final realTournaments = await realTournamentsF;
       final youtubeTournaments = await youtubeTournamentsF;
@@ -1425,8 +1442,10 @@ class _HomeScreenState extends State<HomeScreen> {
       // Twitch-GBT — Best-Effort. Wenn der GQL-Endpoint nicht antwortet
       // oder keine GBT-Videos da sind, wird das Turnier weggelassen (der
       // Service returned dann eine leere Liste).
-      final twitchVideos = await TwitchApi.fetchGbtVideos().catchError(
-          (Object _) => const <Map<String, dynamic>>[]);
+      final twitchVideos = AppVariant.vbtvOnly
+          ? const <Map<String, dynamic>>[]
+          : await TwitchApi.fetchGbtVideos().catchError(
+              (Object _) => const <Map<String, dynamic>>[]);
       final List<Map<String, String>> twitchTournaments = [];
       if (twitchVideos.isNotEmpty) {
         final latestDate = twitchVideos
@@ -3320,11 +3339,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: const Color(0xFF0A0A0A),
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                     child: Row(children: [
-                      _sourceChip('VBTV',   'vbw'),
-                      const SizedBox(width: 8),
-                      _sourceChip('Laola1', 'laola'),
-                      const SizedBox(width: 8),
-                      _sourceChip('GBT',    'twitch'),
+                      // Neutrale Variante kennt nur VBTV — drei Chips von
+                      // denen einer immer an und zwei immer aus waeren sind
+                      // sinnlos, also weg. Der Gender-Filter rueckt nach links.
+                      if (!AppVariant.vbtvOnly) ...[
+                        _sourceChip('VBTV',   'vbw'),
+                        const SizedBox(width: 8),
+                        _sourceChip('Laola1', 'laola'),
+                        const SizedBox(width: 8),
+                        _sourceChip('GBT',    'twitch'),
+                      ],
                       const Spacer(),
                       _filterChip(S.all, 'all', autofocus: true),
                       const SizedBox(width: 8),
@@ -4853,16 +4877,27 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                   color: Colors.orange,
                   borderRadius: BorderRadius.circular(1000),
                 ),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('Powered by',
-                    style: TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 2, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 20),
-                  GestureDetector(
-                    onTap: () => launchUrl(Uri.parse('https://www.instagram.com/bvc_lustenau/'),
-                        mode: LaunchMode.externalApplication),
-                    child: Image.asset('assets/bvc_logo.png', width: 260),
-                  ),
-                ]),
+                child: AppVariant.showClubBranding
+                  ? Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('Powered by',
+                        style: TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 2, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 20),
+                      GestureDetector(
+                        onTap: () => launchUrl(Uri.parse('https://www.instagram.com/bvc_lustenau/'),
+                            mode: LaunchMode.externalApplication),
+                        child: Image.asset('assets/bvc_logo.png', width: 260),
+                      ),
+                    ])
+                  // Neutrale Variante: kein Vereinsbezug. Statt des Logos nur
+                  // der App-Name plus Hinweis, dass das Video weiterlaeuft —
+                  // ein leeres oranges Oval wuerde wie ein Fehler aussehen.
+                  : Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('BVCTV',
+                        style: TextStyle(color: Colors.black87, fontSize: 34, letterSpacing: 4, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 12),
+                      Text(S.blackScreenHint,
+                        style: const TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 1)),
+                    ]),
               )),
             )),
 

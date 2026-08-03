@@ -19,6 +19,9 @@ class S {
   static String get spoilerOffDesc =>
       isEn ? 'All team names visible' : 'Alle Teamnamen sichtbar';
   static String get language => isEn ? 'Language' : 'Sprache';
+  /// Schwarzbild-Overlay am Ende eines 2h-Videos (neutrale Build-Variante).
+  static String get blackScreenHint =>
+      isEn ? 'Recording has ended' : 'Aufzeichnung beendet';
   static String get languageGerman => isEn ? 'German' : 'Deutsch';
   static String get languageEnglish => 'English';
 
