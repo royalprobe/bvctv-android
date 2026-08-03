@@ -35,7 +35,8 @@ class WebViewPlayerScreen extends StatefulWidget {
   State<WebViewPlayerScreen> createState() => _WebViewPlayerScreenState();
 }
 
-class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
+class _WebViewPlayerScreenState extends State<WebViewPlayerScreen>
+    with WidgetsBindingObserver {
   WebViewController? _controller;
   InAppWebViewController? _inAppController;
 
@@ -180,6 +181,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleRemoteKey);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
@@ -898,17 +900,37 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
-  void _closePlayer() {
-    _runJs(
+  /// Stoppt Wiedergabe UND Ton, ohne die Seite zu verlassen.
+  static const _stopJs =
       'try{jwplayer().stop();}catch(e){}'
-      'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
-    );
+      'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}';
+
+  void _closePlayer() {
+    _runJs(_stopJs);
     _loadUrl('about:blank');
     if (mounted) Navigator.pop(context);
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Verlaesst der User die App, muss der Ton weg. Android beendet den
+    // WebView nicht von selbst und ruft dispose() nicht auf — ohne das hier
+    // laeuft der Videoton im Fire-TV-Homemenue weiter. 'inactive' ist bewusst
+    // nicht dabei, das feuert auch bei einem Dialog ueber dem Player.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      try {
+        _runJs(_stopJs);
+        _loadUrl('about:blank');
+      } catch (_) {}
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_handleRemoteKey);
     _seekTimer?.cancel();
     _hideControlsTimer?.cancel();
@@ -916,10 +938,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     _blackScreenTimer?.cancel();
     _initRetryTimer?.cancel();
     try {
-      _runJs(
-        'try{jwplayer().stop();}catch(e){}'
-        'try{var v=document.querySelector("video");if(v){v.pause();v.src="";v.load();}}catch(e){}'
-      );
+      _runJs(_stopJs);
       _loadUrl('about:blank');
     } catch (_) {}
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
