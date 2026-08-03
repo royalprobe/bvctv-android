@@ -4888,15 +4888,18 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                         child: Image.asset('assets/bvc_logo.png', width: 260),
                       ),
                     ])
-                  // Neutrale Variante: kein Vereinsbezug. Statt des Logos nur
-                  // der App-Name plus Hinweis, dass das Video weiterlaeuft —
-                  // ein leeres oranges Oval wuerde wie ein Fehler aussehen.
+                  // Neutrale Variante: kein Vereinsbezug, stattdessen das
+                  // App-Logo mit Hinweis darunter. ClipOval wie in der AppBar —
+                  // bvctv_logo.png hat KEIN Alpha und schwarze Ecken, die auf
+                  // dem orangen Oval sonst als schwarzer Kasten stehen wuerden.
                   : Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Text('BVCTV',
-                        style: TextStyle(color: Colors.black87, fontSize: 34, letterSpacing: 4, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 12),
+                      ClipOval(
+                        child: Image.asset('assets/bvctv_logo.png',
+                            width: 180, height: 180, fit: BoxFit.contain),
+                      ),
+                      const SizedBox(height: 18),
                       Text(S.blackScreenHint,
-                        style: const TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 1)),
+                        style: const TextStyle(color: Colors.black54, fontSize: 17, letterSpacing: 1, fontWeight: FontWeight.w500)),
                     ]),
               )),
             )),
