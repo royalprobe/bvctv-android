@@ -1565,34 +1565,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // und zufaellig ein Laola-Turnier das neueste Datum hat.
         final selectable =
             results.where((t) => _isTournamentVisible(t['id'] ?? ''));
-        final newFirst =
-            (selectable.isNotEmpty ? selectable.first : results.first)['id']!;
-        // Reload nötig wenn (a) anderes Default-Turnier sortiert wurde
-        // ODER (b) die aktuell geladene Playlist Bridge-Extras erhalten hat,
-        // die beim First-Load (parallel zur Bridge gestartet) noch nicht im
-        // Cache waren — sonst fehlen PRE_LIVE/LIVE-Spiele in der Liste.
-        final currentCi = _vbwPlaylistCi[_currentPlaylistId];
-        final hasNewBridgeExtras = currentCi != null &&
-            (_vbwBridgeItems[currentCi]?.isNotEmpty ?? false);
-        final needsReload =
-            newFirst != _currentPlaylistId || hasNewBridgeExtras;
-        // "Alle Turniere" kann berechnet und gecached worden sein, bevor der
-        // Bridge-Scrape fertig war — dann fehlen ihr genau die Videos des
-        // laufenden Turniers. Cache verwerfen, damit sie beim naechsten
-        // Oeffnen frisch gebaut wird.
-        if (_vbwBridgeItems.isNotEmpty) _videosCache.remove(_allId);
-        setState(() {
-          _availableTournaments = results;
-          _currentPlaylistId = newFirst;
-        });
-        if (needsReload) {
-          _videosLoadEpoch++;
-          // Cache verwerfen damit Merge frisch durchläuft
-          _videosCache.remove(newFirst);
-          _loadVideos(newFirst);
+        if (selectable.isEmpty) {
+          // Kein einziges VBTV-Turnier ist anzeigbar — der User hat VBTV
+          // abgeschaltet und nutzt nur Laola1 und/oder GBT. Die kommen erst in
+          // Phase 2, die trifft dann auch die Auswahl. Bis dahin bleibt
+          // _isLoading auf true und der Ladescreen stehen; wuerden wir hier
+          // ein unsichtbares Turnier setzen, saehe der User eine leere
+          // Kachelflaeche mit "Tournament" im Dropdown.
+          setState(() => _availableTournaments = results);
+          _mark('VBTV aus — Auswahl faellt in Phase 2');
+        } else {
+          final newFirst = selectable.first['id']!;
+          // Reload nötig wenn (a) anderes Default-Turnier sortiert wurde
+          // ODER (b) die aktuell geladene Playlist Bridge-Extras erhalten hat,
+          // die beim First-Load (parallel zur Bridge gestartet) noch nicht im
+          // Cache waren — sonst fehlen PRE_LIVE/LIVE-Spiele in der Liste.
+          final currentCi = _vbwPlaylistCi[_currentPlaylistId];
+          final hasNewBridgeExtras = currentCi != null &&
+              (_vbwBridgeItems[currentCi]?.isNotEmpty ?? false);
+          final needsReload =
+              newFirst != _currentPlaylistId || hasNewBridgeExtras;
+          // "Alle Turniere" kann berechnet und gecached worden sein, bevor der
+          // Bridge-Scrape fertig war — dann fehlen ihr genau die Videos des
+          // laufenden Turniers. Cache verwerfen, damit sie beim naechsten
+          // Oeffnen frisch gebaut wird.
+          if (_vbwBridgeItems.isNotEmpty) _videosCache.remove(_allId);
+          setState(() {
+            _availableTournaments = results;
+            _currentPlaylistId = newFirst;
+          });
+          if (needsReload) {
+            _videosLoadEpoch++;
+            // Cache verwerfen damit Merge frisch durchläuft
+            _videosCache.remove(newFirst);
+            _loadVideos(newFirst);
+          }
+          _mark('VBTV nutzbar');
         }
       }
-      _mark('VBTV nutzbar');
     } catch (_) {} finally {
       if (mounted) setState(() => _isLoadingTournaments = false);
     }
@@ -1674,20 +1684,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ...laolaTournaments,
         ...twitchTournaments,
       ].where((t) => !known.contains(t['id'])).toList();
-      if (fresh.isEmpty) return;
 
-      _sortedTournaments = [..._sortedTournaments, ...fresh]
-        ..sort(_compareTournaments);
-      final virtualEntries = virtualTournamentData
-          .map((vt) =>
-              {'id': vt['id'] as String, 'title': vt['title'] as String})
-          .toList();
-      setState(() {
-        _availableTournaments = [..._sortedTournaments, ...virtualEntries];
-      });
-      // Die Aggregation zieht diese Quellen mit — ihr Cache ist jetzt veraltet.
-      _videosCache.remove(_allId);
-      _mark('zusatzquellen eingehaengt (${fresh.length} turniere)');
+      if (fresh.isNotEmpty) {
+        _sortedTournaments = [..._sortedTournaments, ...fresh]
+          ..sort(_compareTournaments);
+        final virtualEntries = virtualTournamentData
+            .map((vt) =>
+                {'id': vt['id'] as String, 'title': vt['title'] as String})
+            .toList();
+        setState(() {
+          _availableTournaments = [..._sortedTournaments, ...virtualEntries];
+        });
+        // Die Aggregation zieht diese Quellen mit — ihr Cache ist veraltet.
+        _videosCache.remove(_allId);
+        _mark('zusatzquellen eingehaengt (${fresh.length} turniere)');
+      }
+
+      // Auswahl NUR nachziehen, wenn gerade gar nichts Anzeigbares ausgewaehlt
+      // ist — typisch: VBTV abgeschaltet, dann hatte Phase 1 nichts zu waehlen.
+      // Eine bereits nutzbare Ansicht wird NICHT umgeschaltet, sonst wuerde sie
+      // dem User weggezogen sobald er schon blaettert.
+      if (_currentPlaylistId.isEmpty ||
+          !_isTournamentVisible(_currentPlaylistId)) {
+        final visible = _availableTournaments
+            .where((t) => _isTournamentVisible(t['id'] ?? ''));
+        if (visible.isNotEmpty) {
+          final pick = visible.first['id']!;
+          setState(() => _currentPlaylistId = pick);
+          _loadVideos(pick);
+          _mark('auswahl aus phase 2: $pick');
+        } else if (_isLoading) {
+          // Auch nach Phase 2 gibt es nichts anzuzeigen. Den Ladescreen
+          // beenden, sonst dreht er sich endlos.
+          setState(() => _isLoading = false);
+          _mark('keine anzeigbaren turniere');
+        }
+      }
     } catch (_) {}
   }
 
