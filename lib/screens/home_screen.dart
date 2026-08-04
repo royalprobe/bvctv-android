@@ -46,6 +46,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Session live gehen; 12 Minuten sind frueh genug und kosten nur einen
   /// HTML-Abruf.
   static const _laolaScrapeInterval = Duration(minutes: 12);
+  /// Rohdaten je VBW-Playlist fuer die Aggregation, mit Zeitstempel. Deckt die
+  /// Mehrfach-Builds beim App-Start ab (VBTV → plus Zusatzquellen → nach dem
+  /// Laola-Scrape), ohne dass jeder Durchlauf alle Playlists neu holt.
+  final Map<String, (DateTime, List<VideoItem>)> _aggregatePlaylistCache = {};
+  static const _aggregatePlaylistTtl = Duration(minutes: 5);
+
+  /// Sortierung der Aggregation: LIVE zuerst, dann nach Datum absteigend.
+  static int _videoOrder(VideoItem a, VideoItem b) {
+    if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
+    if (a.matchDate == null) return 1;
+    if (b.matchDate == null) return -1;
+    return b.matchDate!.compareTo(a.matchDate!);
+  }
+
   /// Wie oft "Alle Turniere" im Hintergrund neu gebaut werden darf. Bewusst
   /// deutlich seltener als der 90s-Tick des _videoRefreshTimer — siehe die
   /// Begruendung dort.
@@ -2564,14 +2578,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ? _availableTournaments
                 .where((t) => !t['id']!.startsWith('__'))
                 .map<Future<List<VideoItem>>>((t) async {
+                  final plId = t['id']!;
+                  // Kurzlebiger Cache je Playlist. Beim App-Start wird die
+                  // Aggregation dreimal gebaut (erst VBTV, dann mit den
+                  // Zusatzquellen, dann nach dem Laola-Scrape) — ohne Cache
+                  // holt jeder Durchlauf alle ~20 Playlists neu, gemessen
+                  // 4,2 MB pro Durchlauf.
+                  final hit = _aggregatePlaylistCache[plId];
+                  if (hit != null &&
+                      DateTime.now().difference(hit.$1) <
+                          _aggregatePlaylistTtl) {
+                    return hit.$2;
+                  }
                   try {
                     final res = await http.get(
-                      Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/${t['id']}?overrideFeedType=moreinfo&ctx=$ctx'),
+                      Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$plId?overrideFeedType=moreinfo&ctx=$ctx'),
                       headers: {'Origin': 'https://tv.volleyballworld.com'},
                     ).timeout(const Duration(seconds: 10));
                     if (res.statusCode == 200) {
                       final data = jsonDecode(res.body);
-                      return (data['entry'] as List? ?? []).map(_itemFromJson).toList();
+                      final items = (data['entry'] as List? ?? [])
+                          .map(_itemFromJson)
+                          .toList(growable: false);
+                      _aggregatePlaylistCache[plId] = (DateTime.now(), items);
+                      return items;
                     }
                   } catch (_) {}
                   return <VideoItem>[];
@@ -2600,29 +2630,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ? _allTwitchVideoItemsForAggregate()
             : Future.value(const <VideoItem>[]);
 
-        final allResults = await Future.wait([
+        final sources = <Future<List<VideoItem>>>[
           ...playlistFutures,
           ...vtFutures,
           bridgeFuture,
           laolaFuture,
           twitchFuture,
-        ]);
-        final all = allResults.expand((l) => l).toList();
+        ];
+
+        // Schrittweise veroeffentlichen statt auf ALLE Quellen zu warten. Die
+        // Aggregation zieht ~20 Playlists und baut daraus knapp 3000 Items;
+        // gemessen stand der Ladescreen sonst 12-13s, obwohl die ersten
+        // Playlists nach ~1s da waren. Jede fertige Quelle wird jetzt sofort
+        // eingemischt, die Liste waechst sichtbar.
+        //
+        // NUR beim nicht-stillen Laden: bei einem Hintergrund-Refresh startet
+        // die Sammlung wieder leer, und der User wuerde die Liste erst
+        // schrumpfen und dann wieder wachsen sehen.
+        final collected = <VideoItem>[];
         final seen = <String>{};
-        final unique = all.where((v) => seen.add(v.id)).toList()
-          ..sort((a, b) {
-            if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
-            if (a.matchDate == null) return 1;
-            if (b.matchDate == null) return -1;
-            return b.matchDate!.compareTo(a.matchDate!);
+        Timer? publishTimer;
+        var publishPending = false;
+
+        var publishedOnce = false;
+
+        void publish() {
+          publishPending = false;
+          if (_videosLoadEpoch != epoch || !mounted) return;
+          final snapshot = [...collected]..sort(_videoOrder);
+          setState(() {
+            _videos = snapshot;
+            // Sobald das erste Paket steht, weg mit dem Ladescreen.
+            _isLoading = false;
           });
+          if (!publishedOnce) {
+            publishedOnce = true;
+            if (_startupWatch.isRunning) {
+              _mark('erste aggregations-kacheln (${snapshot.length} videos)');
+            }
+          }
+        }
+
+        void schedulePublish() {
+          // Bei einem stillen Refresh NICHT schrittweise: die Sammlung startet
+          // leer, der User saehe die Liste schrumpfen und wieder wachsen.
+          if (silent || publishPending) return;
+          publishPending = true;
+          // Buendeln: 20 Quellen einzeln zu rendern hiesse 20 Sortierlaeufe
+          // ueber bis zu 3000 Items.
+          publishTimer = Timer(const Duration(milliseconds: 250), publish);
+        }
+
+        await Future.wait(sources.map((f) => f.then((items) {
+              for (final v in items) {
+                if (seen.add(v.id)) collected.add(v);
+              }
+              schedulePublish();
+            })));
+
+        publishTimer?.cancel();
+        final unique = [...collected]..sort(_videoOrder);
         _videosCache[pid] = unique;
         _lastAggregateRefresh = DateTime.now();
         if (_videosLoadEpoch == epoch && mounted) {
           setState(() => _videos = unique);
         }
         if (_startupWatch.isRunning) {
-          _mark('aggregation sichtbar (${unique.length} videos)');
+          _mark('aggregation komplett (${unique.length} videos)');
         }
         return;
       }
