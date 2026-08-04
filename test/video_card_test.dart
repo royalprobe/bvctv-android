@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vbtv_app/l10n/strings.dart';
 import 'package:vbtv_app/models/video_item.dart';
@@ -183,6 +184,68 @@ void main() {
     expect(find.textContaining(_teamA), findsOneWidget,
         reason: 'der aufgedeckte Eintrag bleibt derselbe, egal an welcher Position');
     expect(find.text(S.spoilerActive), findsOneWidget);
+  });
+
+  /// Regression: Der Beenden-Dialog loest beim KeyDown aus und schliesst sich
+  /// sofort. Das KeyUp desselben Tastendrucks landete danach auf der
+  /// Videokachel darunter — und weil Spoiler-Karten wegen des Long-Press erst
+  /// beim Loslassen ausloesen, hat der Bestaetigungsklick das Video geoeffnet.
+  testWidgets('Bestaetigungsklick oeffnet nicht die Karte darunter',
+      (tester) async {
+    var opened = 0;
+    var dialogOpen = true;
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(
+          builder: (ctx, setState) => Column(children: [
+            // Steht fuer den Beenden-Dialog: loest beim KeyDown aus und ist
+            // danach weg.
+            if (dialogOpen)
+              TvFocusButton(
+                autofocus: true,
+                onPressed: () => setState(() => dialogOpen = false),
+                child: const Text('Beenden'),
+              ),
+            SizedBox(
+              width: 300,
+              height: 160,
+              child: VideoCard(
+                video: _final(),
+                spoiler: true,
+                onPressed: () => opened++,
+                genderBadge: const SizedBox.shrink(),
+                statusBadge: const SizedBox.shrink(),
+                dateStr: '31. Mai 2026',
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Taste druecken — der Dialog-Button verarbeitet das KeyDown und schliesst.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.text('Beenden'), findsNothing);
+
+    // Fokus faellt auf die Karte, DANN kommt das Loslassen an.
+    Focus.of(tester.element(find.descendant(
+            of: find.byType(VideoCard), matching: find.byType(GestureDetector))))
+        .requestFocus();
+    await tester.pumpAndSettle();
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    expect(opened, 0,
+        reason: 'das KeyUp gehoert zum Dialog-Druck, nicht zur Karte');
+
+    // Ein vollstaendiger eigener Druck funktioniert weiterhin.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(opened, 1);
   });
 
   testWidgets('kurzer Tap oeffnet das Video statt aufzudecken', (tester) async {

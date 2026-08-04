@@ -232,6 +232,13 @@ class TvFocusButtonState extends State<TvFocusButton> {
   /// Der laufende Tastendruck hat bereits ein onLongPress ausgeloest — beim
   /// Loslassen darf dann NICHT zusaetzlich onPressed feuern.
   bool _longPressFired = false;
+  /// Der KeyDown dieses Tastendrucks ist HIER angekommen.
+  ///
+  /// Ohne diese Pruefung reicht ein KeyUp allein zum Ausloesen — und genau das
+  /// passierte beim Beenden-Dialog: dessen Buttons feuern beim KeyDown und
+  /// schliessen den Dialog, das KeyUp desselben Drucks landet danach auf der
+  /// Videokachel darunter und hat das Video geoeffnet.
+  bool _selectDownSeen = false;
 
   static bool _isSelect(KeyEvent e) =>
       e.logicalKey == LogicalKeyboardKey.select ||
@@ -241,7 +248,13 @@ class TvFocusButtonState extends State<TvFocusButton> {
   Widget build(BuildContext context) {
     return Focus(
       autofocus: widget.autofocus,
-      onFocusChange: (f) { setState(() => _focused = f); widget.onFocusChanged?.call(f); },
+      onFocusChange: (f) {
+        // Fokuswechsel mitten im Tastendruck: der angefangene Druck gehoert
+        // nicht mehr uns.
+        if (!f) { _selectDownSeen = false; _longPressFired = false; }
+        setState(() => _focused = f);
+        widget.onFocusChanged?.call(f);
+      },
       onKeyEvent: (_, event) {
         if (!_isSelect(event)) return KeyEventResult.ignored;
         // Ohne Long-Press-Handler bleibt es beim alten Verhalten: sofort beim
@@ -257,9 +270,15 @@ class TvFocusButtonState extends State<TvFocusButton> {
         // wuerde das Gedrueckthalten zuerst das Video oeffnen und der
         // Long-Press liefe ins Leere.
         if (event is KeyDownEvent) {
+          _selectDownSeen = true;
           _longPressFired = false;
           return KeyEventResult.handled;
         }
+        // Ein KeyRepeat/KeyUp ohne eigenen KeyDown gehoert zu einem Druck, der
+        // woanders begonnen hat (typisch: der Beenden-Dialog schliesst sich
+        // beim KeyDown und wir bekommen nur noch das KeyUp ab). Ignorieren,
+        // sonst oeffnet der Bestaetigungsklick das Video darunter.
+        if (!_selectDownSeen) return KeyEventResult.ignored;
         if (event is KeyRepeatEvent) {
           if (!_longPressFired) {
             _longPressFired = true;
@@ -269,6 +288,7 @@ class TvFocusButtonState extends State<TvFocusButton> {
         }
         if (event is KeyUpEvent) {
           if (!_longPressFired) widget.onPressed();
+          _selectDownSeen = false;
           _longPressFired = false;
           return KeyEventResult.handled;
         }
