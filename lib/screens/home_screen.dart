@@ -1565,7 +1565,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // und zufaellig ein Laola-Turnier das neueste Datum hat.
         final selectable =
             results.where((t) => _isTournamentVisible(t['id'] ?? ''));
-        if (selectable.isEmpty) {
+        // Standard-Ansicht ist "Alle Turniere" ueber die aktivierten Quellen.
+        // Nur sinnvoll wenn VBTV an ist: Phase 1 hat ausschliesslich
+        // VBTV-Daten, mit abgeschaltetem VBTV waere die Aggregation hier noch
+        // leer. Dann trifft Phase 2 die Auswahl.
+        if (_isTournamentVisible(_allId) && _sourceVbw) {
+          if (_vbwBridgeItems.isNotEmpty) _videosCache.remove(_allId);
+          setState(() {
+            _availableTournaments = results;
+            _currentPlaylistId = _allId;
+          });
+          _videosLoadEpoch++;
+          _videosCache.remove(_allId);
+          _loadVideos(_allId);
+          _mark('VBTV nutzbar (alle turniere)');
+        } else if (selectable.isEmpty) {
           // Kein einziges VBTV-Turnier ist anzeigbar — der User hat VBTV
           // abgeschaltet und nutzt nur Laola1 und/oder GBT. Die kommen erst in
           // Phase 2, die trifft dann auch die Auswahl. Bis dahin bleibt
@@ -1700,17 +1714,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _mark('zusatzquellen eingehaengt (${fresh.length} turniere)');
       }
 
-      // Auswahl NUR nachziehen, wenn gerade gar nichts Anzeigbares ausgewaehlt
-      // ist — typisch: VBTV abgeschaltet, dann hatte Phase 1 nichts zu waehlen.
-      // Eine bereits nutzbare Ansicht wird NICHT umgeschaltet, sonst wuerde sie
-      // dem User weggezogen sobald er schon blaettert.
-      if (_currentPlaylistId.isEmpty ||
+      if (_currentPlaylistId == _allId) {
+        // Die Aggregation steht schon, enthaelt aber nur die VBTV-Daten aus
+        // Phase 1. Still nachladen, damit die Zusatzquellen dazukommen — ohne
+        // Ladescreen, die Ansicht bleibt benutzbar.
+        _videosCache.remove(_allId);
+        _loadVideos(null, true, true);
+        _mark('aggregation mit zusatzquellen nachgeladen');
+      } else if (_currentPlaylistId.isEmpty ||
           !_isTournamentVisible(_currentPlaylistId)) {
+        // Nichts Anzeigbares ausgewaehlt — typisch: VBTV abgeschaltet, dann
+        // hatte Phase 1 nichts zu waehlen. Eine bereits nutzbare Ansicht wird
+        // NICHT umgeschaltet, sonst wuerde sie dem User weggezogen sobald er
+        // schon blaettert.
         final visible = _availableTournaments
             .where((t) => _isTournamentVisible(t['id'] ?? ''));
-        if (visible.isNotEmpty) {
-          final pick = visible.first['id']!;
+        final pick = _isTournamentVisible(_allId)
+            ? _allId
+            : (visible.isNotEmpty ? visible.first['id']! : null);
+        if (pick != null) {
           setState(() => _currentPlaylistId = pick);
+          _videosCache.remove(pick);
           _loadVideos(pick);
           _mark('auswahl aus phase 2: $pick');
         } else if (_isLoading) {
@@ -2596,6 +2620,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _lastAggregateRefresh = DateTime.now();
         if (_videosLoadEpoch == epoch && mounted) {
           setState(() => _videos = unique);
+        }
+        if (_startupWatch.isRunning) {
+          _mark('aggregation sichtbar (${unique.length} videos)');
         }
         return;
       }
