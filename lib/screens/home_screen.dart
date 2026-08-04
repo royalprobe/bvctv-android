@@ -551,6 +551,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Liste der Turniere die aktuell gemaess Source-Toggles im Dropdown
   /// gezeigt werden sollen. "Alle Turniere" bleibt sichtbar wenn
   /// mindestens eine Source aktiv ist.
+  /// Turnierliste OHNE die virtuellen Eintraege, sortiert. Wird in zwei Phasen
+  /// befuellt (erst VBTV, dann die Zusatzquellen) und muss deshalb ueber den
+  /// ersten Durchlauf hinaus erhalten bleiben — die virtuellen Eintraege
+  /// haengen bewusst unsortiert hinten dran.
+  List<Map<String, String>> _sortedTournaments = [];
+
+  /// Neuestes match_date zuerst; ohne Datum entscheidet die Jahreszahl im Titel.
+  static int _compareTournaments(
+      Map<String, String> a, Map<String, String> b) {
+    final da = a['matchDate'] ?? '';
+    final db = b['matchDate'] ?? '';
+    if (da.isNotEmpty && db.isNotEmpty) return db.compareTo(da);
+    if (da.isNotEmpty) return -1;
+    if (db.isNotEmpty) return 1;
+    int titleYear(String t) {
+      final m = RegExp(r'\b(20\d{2})\b').firstMatch(t);
+      return m != null ? int.parse(m.group(1)!) : 0;
+    }
+    return titleYear(b['title'] ?? '').compareTo(titleYear(a['title'] ?? ''));
+  }
+
   /// Ist die Quelle dieses Turniers gerade eingeschaltet?
   bool _isTournamentVisible(String id) {
     if (id == _allId) return _sourceVbw || _sourceLaola || _sourceTwitch;
@@ -1507,34 +1528,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
 
-      // Reguläre Turniere UND YouTube-Playlists parallel laden
       final realTournamentsF = Future.wait(cgPlaylistIds.map(fetchTitle))
           .then((r) => r.whereType<Map<String, String>>().toList());
-      final youtubeTournamentsF = Future.wait(youtubePlaylistIds.map((pid) async {
-        final data = await _fetchYoutubePlaylist(pid);
-        if (data == null) return null;
-        _youtubeCache[pid] = data;
-        return <String, String>{
-          'id': '__yt_$pid',
-          'title': data['title'] as String,
-          'matchDate': data['sortDate'] as String,
-        };
-      })).then((r) => r.whereType<Map<String, String>>().toList());
-
-      // Dynamische Laola1-Listen (HTML-Scrape) parallel laden – Tour Pro etc.
-      // In der neutralen Variante komplett uebersprungen (siehe AppVariant).
-      final laolaDynamicF = AppVariant.vbtvOnly
-          ? Future.value(const <Map<String, String>>[])
-          : Future.wait(laolaDynamicPlaylists.map((config) async {
-              final data = await _fetchLaolaList(config);
-              if (data == null) return null;
-              _laolaListCache[config['id']!] = data;
-              return <String, String>{
-                'id': config['id']!,
-                'title': data['title'] as String,
-                'matchDate': data['sortDate'] as String,
-              };
-            })).then((r) => r.whereType<Map<String, String>>().toList());
 
       // VBW-Bridge Phase 1 startet SOFORT, parallel zu den Titel-Requests.
       // Frueher hing der komplette Bridge-Block an realTournamentsF, weil er
@@ -1543,22 +1538,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Requests und zwei Feeds mit einigen hundert KB) hintereinander statt
       // nebeneinander und bestimmten zusammen die Startzeit.
       final vbwBridgeGroupsF = _fetchVbwBridgeGroups();
-      // Twitch-GBT — Best-Effort. Wenn der GQL-Endpoint nicht antwortet oder
-      // keine GBT-Videos da sind, wird das Turnier weggelassen. Wird hier
-      // schon gestartet; stand vorher als await hinter der Bridge und lief
-      // damit ebenfalls seriell.
-      final twitchVideosF = AppVariant.vbtvOnly
-          ? Future.value(const <Map<String, dynamic>>[])
-          : TwitchApi.fetchGbtVideos().catchError(
-              (Object _) => const <Map<String, dynamic>>[]);
 
       final realTournaments = await realTournamentsF;
       titleClient.close();
       _mark('titel-requests (${realTournaments.length})');
-      final youtubeTournaments = await youtubeTournamentsF;
-      _mark('youtube-feeds');
-      final laolaDynamicTournaments = await laolaDynamicF;
-      _mark('laola-listen');
       final bridgeGroups = await vbwBridgeGroupsF;
       _mark('bridge phase 1 (${bridgeGroups.length} competition items)');
       // Phase 2: jetzt ist das ci-Set der offiziellen Playlists bekannt.
@@ -1568,43 +1551,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         realTournaments.map((m) => m['ci']).whereType<String>().toSet(),
       );
       _mark('bridge phase 2 (${vbwBridgeTournaments.length} turniere)');
-      final twitchVideos = await twitchVideosF;
-      _mark('twitch');
-      final List<Map<String, String>> twitchTournaments = [];
-      if (twitchVideos.isNotEmpty) {
-        final latestDate = twitchVideos
-            .map((v) => (v['matchDate'] as String?) ?? '')
-            .where((d) => d.isNotEmpty)
-            .fold<String>('', (a, b) => b.compareTo(a) > 0 ? b : a);
-        twitchTournaments.add({
-          'id': TwitchApi.tournamentId,
-          'title': TwitchApi.tournamentTitle,
-          'matchDate': latestDate.isNotEmpty ? latestDate : '',
-        });
-      }
-      final results = [
-        ...realTournaments,
-        ...youtubeTournaments,
-        ...laolaDynamicTournaments,
-        ...vbwBridgeTournaments,
-        ...twitchTournaments,
-      ];
 
-      // Sortierung: match_date des neuesten Videos (descending), Fallback: Jahr im Titel
-      int titleYear(String t) {
-        final m = RegExp(r'\b(20\d{2})\b').firstMatch(t);
-        return m != null ? int.parse(m.group(1)!) : 0;
-      }
-      results.sort((a, b) {
-        final da = a['matchDate'] ?? '';
-        final db = b['matchDate'] ?? '';
-        if (da.isNotEmpty && db.isNotEmpty) return db.compareTo(da);
-        if (da.isNotEmpty) return -1;
-        if (db.isNotEmpty) return 1;
-        return titleYear(b['title']!).compareTo(titleYear(a['title']!));
-      });
-
-      results.addAll(virtualEntries);
+      _sortedTournaments = [...realTournaments, ...vbwBridgeTournaments]
+        ..sort(_compareTournaments);
+      final results = [..._sortedTournaments, ...virtualEntries];
 
       if (mounted) {
         // Nur ein Turnier waehlen, dessen Quelle auch eingeschaltet ist.
@@ -1642,9 +1592,103 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _loadVideos(newFirst);
         }
       }
+      _mark('VBTV nutzbar');
     } catch (_) {} finally {
       if (mounted) setState(() => _isLoadingTournaments = false);
     }
+
+    // Zusatzquellen erst danach — siehe _loadSecondarySources.
+    await _loadSecondarySources();
+  }
+
+  /// YouTube-Playlists, dynamische Laola1-Listen und GBT/Twitch nachladen,
+  /// NACHDEM die VBTV-Turniere stehen und die App bedienbar ist.
+  ///
+  /// Vorher hingen alle Quellen im selben Future.wait: die Turnierliste war
+  /// erst da, wenn auch die langsamste geantwortet hatte. Gemessen kosteten
+  /// YouTube-Feeds und Laola-Listen zusammen rund 3 Sekunden, in denen nur der
+  /// Ladescreen stand — obwohl die VBTV-Daten laengst vorlagen.
+  ///
+  /// Die Vorauswahl bleibt bewusst unangetastet: waehlte man hier auf ein
+  /// neueres Turnier um, wuerde dem User die Ansicht unter den Fingern
+  /// weggezogen, sobald er schon zu blaettern begonnen hat.
+  Future<void> _loadSecondarySources() async {
+    try {
+      final youtubeF = Future.wait(youtubePlaylistIds.map((pid) async {
+        final data = await _fetchYoutubePlaylist(pid);
+        if (data == null) return null;
+        _youtubeCache[pid] = data;
+        return <String, String>{
+          'id': '__yt_$pid',
+          'title': data['title'] as String,
+          'matchDate': data['sortDate'] as String,
+        };
+      })).then((r) => r.whereType<Map<String, String>>().toList());
+
+      // Dynamische Laola1-Listen (HTML-Scrape) – Tour Pro etc.
+      // In der neutralen Variante komplett uebersprungen (siehe AppVariant).
+      final laolaF = AppVariant.vbtvOnly
+          ? Future.value(const <Map<String, String>>[])
+          : Future.wait(laolaDynamicPlaylists.map((config) async {
+              final data = await _fetchLaolaList(config);
+              if (data == null) return null;
+              _laolaListCache[config['id']!] = data;
+              return <String, String>{
+                'id': config['id']!,
+                'title': data['title'] as String,
+                'matchDate': data['sortDate'] as String,
+              };
+            })).then((r) => r.whereType<Map<String, String>>().toList());
+
+      // Twitch-GBT — Best-Effort. Antwortet der GQL-Endpoint nicht oder gibt
+      // es keine GBT-Videos, faellt das Turnier einfach weg.
+      final twitchF = AppVariant.vbtvOnly
+          ? Future.value(const <Map<String, dynamic>>[])
+          : TwitchApi.fetchGbtVideos().catchError(
+              (Object _) => const <Map<String, dynamic>>[]);
+
+      final youtubeTournaments = await youtubeF;
+      _mark('youtube-feeds (${youtubeTournaments.length})');
+      final laolaTournaments = await laolaF;
+      _mark('laola-listen (${laolaTournaments.length})');
+      final twitchVideos = await twitchF;
+      _mark('twitch (${twitchVideos.length} videos)');
+
+      final twitchTournaments = <Map<String, String>>[];
+      if (twitchVideos.isNotEmpty) {
+        final latestDate = twitchVideos
+            .map((v) => (v['matchDate'] as String?) ?? '')
+            .where((d) => d.isNotEmpty)
+            .fold<String>('', (a, b) => b.compareTo(a) > 0 ? b : a);
+        twitchTournaments.add({
+          'id': TwitchApi.tournamentId,
+          'title': TwitchApi.tournamentTitle,
+          'matchDate': latestDate.isNotEmpty ? latestDate : '',
+        });
+      }
+
+      if (!mounted) return;
+      final known = _sortedTournaments.map((t) => t['id']).toSet();
+      final fresh = [
+        ...youtubeTournaments,
+        ...laolaTournaments,
+        ...twitchTournaments,
+      ].where((t) => !known.contains(t['id'])).toList();
+      if (fresh.isEmpty) return;
+
+      _sortedTournaments = [..._sortedTournaments, ...fresh]
+        ..sort(_compareTournaments);
+      final virtualEntries = virtualTournamentData
+          .map((vt) =>
+              {'id': vt['id'] as String, 'title': vt['title'] as String})
+          .toList();
+      setState(() {
+        _availableTournaments = [..._sortedTournaments, ...virtualEntries];
+      });
+      // Die Aggregation zieht diese Quellen mit — ihr Cache ist jetzt veraltet.
+      _videosCache.remove(_allId);
+      _mark('zusatzquellen eingehaengt (${fresh.length} turniere)');
+    } catch (_) {}
   }
 
   static const _allId = '__all__';
