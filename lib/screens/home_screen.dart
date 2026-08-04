@@ -1444,16 +1444,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Titel-Requests mit 3,8s der dominierende Posten der Startzeit.
           // Mit vollstaendig gelesenem Response plus gemeinsamem Client
           // bleiben die Verbindungen am Leben und werden wiederverwendet.
-          final res = await titleClient.get(
-            Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id'),
-            headers: const {
-              'Origin': 'https://tv.volleyballworld.com',
-              'Range': 'bytes=0-3071',
-            },
-          ).timeout(const Duration(seconds: 8));
-          // 206 = Range akzeptiert, 200 = Server ignoriert ihn (dann halt ganz).
-          if (res.statusCode != 206 && res.statusCode != 200) return null;
-          final raw = res.body;
+          final client = http.Client();
+          final req = http.Request('GET',
+              Uri.parse('https://zapp-5434-volleyball-tv.web.app/jw/playlists/$id'));
+          req.headers['Origin'] = 'https://tv.volleyballworld.com';
+          final streamed = await client.send(req).timeout(const Duration(seconds: 8));
+          if (streamed.statusCode != 200) { client.close(); return null; }
+          final buf = StringBuffer();
+          await for (final chunk in streamed.stream) {
+            buf.write(utf8.decode(chunk, allowMalformed: true));
+            if (buf.length >= 3072) break;
+          }
+          client.close();
+          final raw = buf.toString();
           final m = RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(raw);
           if (m == null) return null;
           final title = jsonDecode('"${m.group(1)}"') as String;
