@@ -424,6 +424,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Schaltet im Preload-WebView jedes Medien-Element stumm — auch die, die
+  /// das Player-Skript erst spaeter einhaengt.
+  static const _mutePreloadJs = '''
+(function(){
+  function mute(){
+    document.querySelectorAll('video,audio').forEach(function(e){
+      e.muted = true; e.volume = 0;
+    });
+  }
+  mute();
+  try {
+    new MutationObserver(mute).observe(document.documentElement,
+        {childList:true, subtree:true});
+  } catch(e) {}
+})();
+''';
+
   void _startPreload(VideoItem video) {
     if (_preloadedVideoId == video.id) return;
     _preloadFocusTimer?.cancel();
@@ -439,8 +456,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final playerUrl = 'https://tv.volleyballworld.com/player?self-link=$selfLink&screen-id=696c5338-8a65-44fb-94c6-41411be52290';
       final ctrl = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
-        ..loadRequest(Uri.parse(playerUrl));
+        ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+      // Der Preload ist ein 1x1 Pixel grosser WebView, der die Player-Seite
+      // vorwaermt — die startet die Wiedergabe von selbst, also MIT Ton.
+      // Hart stummschalten statt sich allein auf das Lifecycle-Aufraeumen zu
+      // verlassen: man soll grundsaetzlich kein Video hoeren, das man nie
+      // gestartet hat. Der MutationObserver ist noetig, weil das
+      // <video>-Element erst vom Player-Skript eingehaengt wird.
+      ctrl.setNavigationDelegate(NavigationDelegate(
+        onPageFinished: (_) {
+          ctrl.runJavaScript(_mutePreloadJs).catchError((_) {});
+        },
+      ));
+      ctrl.loadRequest(Uri.parse(playerUrl));
       setState(() { _preloadController = ctrl; _preloadedVideoId = video.id; });
     });
   }
