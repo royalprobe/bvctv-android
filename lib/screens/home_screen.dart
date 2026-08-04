@@ -239,8 +239,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadSettings();
-    _loadTournamentList();
+    // Erst die Einstellungen, DANN die Turnierliste: welches Turnier
+    // vorausgewaehlt wird, haengt von den Source-Toggles ab. Liefe beides
+    // parallel, koennte die Liste mit den Default-Werten (alle Quellen an)
+    // entscheiden und auf einem Turnier landen, das der User ausgeblendet hat.
+    // Die Storage-Reads sind lokal und kosten nur wenige Millisekunden.
+    _loadSettings().then((_) {
+      if (mounted) _loadTournamentList();
+    });
     _loadLiveAndUpcoming();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowNoCredsHint());
     // Frühe Retries falls der erste Aufruf scheiterte oder langsam war
@@ -545,17 +551,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Liste der Turniere die aktuell gemaess Source-Toggles im Dropdown
   /// gezeigt werden sollen. "Alle Turniere" bleibt sichtbar wenn
   /// mindestens eine Source aktiv ist.
-  List<Map<String, String>> _visibleTournaments() {
-    return _availableTournaments.where((t) {
-      final id = t['id'] ?? '';
-      if (id == _allId) return _sourceVbw || _sourceLaola || _sourceTwitch;
-      switch (_tournamentSource(id)) {
-        case 'twitch': return _sourceTwitch;
-        case 'laola':  return _sourceLaola;
-        default:       return _sourceVbw;
-      }
-    }).toList();
+  /// Ist die Quelle dieses Turniers gerade eingeschaltet?
+  bool _isTournamentVisible(String id) {
+    if (id == _allId) return _sourceVbw || _sourceLaola || _sourceTwitch;
+    switch (_tournamentSource(id)) {
+      case 'twitch': return _sourceTwitch;
+      case 'laola':  return _sourceLaola;
+      default:       return _sourceVbw;
+    }
   }
+
+  List<Map<String, String>> _visibleTournaments() =>
+      _availableTournaments.where((t) => _isTournamentVisible(t['id'] ?? '')).toList();
 
   /// Handler fuer die drei Source-Toggle-Chips oben ueber dem Dropdown.
   void _toggleSource(String src) {
@@ -1600,7 +1607,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       results.addAll(virtualEntries);
 
       if (mounted) {
-        final newFirst = results.first['id']!;
+        // Nur ein Turnier waehlen, dessen Quelle auch eingeschaltet ist.
+        // Sonst landet die App auf einem Eintrag, den das Dropdown gar nicht
+        // anzeigt (Label faellt auf den orElse-Platzhalter zurueck) und dessen
+        // Videos _allVideos wegfiltert — sichtbar als komplett leerer Start
+        // mit "Tournament" im Dropdown, sobald z.B. Laola1 abgeschaltet ist
+        // und zufaellig ein Laola-Turnier das neueste Datum hat.
+        final selectable =
+            results.where((t) => _isTournamentVisible(t['id'] ?? ''));
+        final newFirst =
+            (selectable.isNotEmpty ? selectable.first : results.first)['id']!;
         // Reload nötig wenn (a) anderes Default-Turnier sortiert wurde
         // ODER (b) die aktuell geladene Playlist Bridge-Extras erhalten hat,
         // die beim First-Load (parallel zur Bridge gestartet) noch nicht im
