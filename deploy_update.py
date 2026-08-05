@@ -145,11 +145,27 @@ def github_release(token, username, repo_name, version_name, changelog, apks):
     except GithubException:
         pass
 
+    # Legende an die Release-Notes haengen. Die Assets unterscheiden sich nur
+    # durch "-neutral-" im Dateinamen — ohne Hinweis greift man auf der
+    # Release-Seite leicht zum falschen APK und sieht dann nur VBTV.
+    legend_lines = []
+    if "bvc" in apks:
+        legend_lines.append(
+            f"- **`{apks['bvc'].name}`** ← die normale App: VBTV + Laola1 + GBT. "
+            "**Diese hier nehmen.**")
+    if "neutral" in apks:
+        legend_lines.append(
+            f"- `{apks['neutral'].name}` — abgespeckte Test-Variante: nur VBTV, "
+            "keine Source-Umschalter, kein Vereinsbezug.")
+    body = changelog
+    if legend_lines:
+        body = changelog + "\n\n---\n\n### Welches APK?\n\n" + "\n".join(legend_lines)
+
     print(f"🚀  Erstelle Release {tag} …")
     release = repo.create_git_release(
         tag=tag,
         name=f"Version {version_name}",
-        message=changelog,
+        message=body,
         draft=False,
         prerelease=False,
     )
