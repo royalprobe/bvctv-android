@@ -53,7 +53,12 @@ class LaolaLivestreamScraper {
           'User-Agent': 'Mozilla/5.0',
           'Accept': 'text/html,application/xhtml+xml',
         },
-      ).timeout(const Duration(seconds: 6));
+      // 12s statt 6: der Scrape startet seit v1.0.174 SOFORT beim App-Start
+      // und teilt sich die Leitung mit 28 Titel-Abrufen und den Bridge-Feeds.
+      // Auf dem Fire Stick lief er dadurch in seine Frist
+      // ("TimeoutException after 0:00:06") und die Laola-Livestreams fehlten
+      // bis zum naechsten periodischen Versuch.
+      ).timeout(const Duration(seconds: 12));
       if (res.statusCode != 200) {
         debugPrint('[laola-scrape] HTTP ${res.statusCode}');
         return const [];
