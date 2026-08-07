@@ -1788,7 +1788,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _phase2Bereit = true;
       }
 
-      if (_currentPlaylistId == _allId) {
+      if (_currentPlaylistId == _allId && !_aggregatLaeuft) {
         // Die Aggregation steht schon, enthaelt aber nur die VBTV-Daten aus
         // Phase 1. Still nachladen, damit die Zusatzquellen dazukommen — ohne
         // Ladescreen, die Ansicht bleibt benutzbar.
@@ -2642,7 +2642,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // hatte die Live-Courts dann doch und schob sie nach vorne.
         // Gemessen auf dem Fire Stick: zwei Endstaende im Abstand von 0,8s,
         // beide mit 2463 Videos, aber unterschiedlicher Reihenfolge.
-        if (!silent) await _warteAufZusatzquellen();
+        // Laeuft dieser Durchlauf noch? Solange ja, braucht Phase 2 der
+        // Turnierliste KEINEN zweiten Durchlauf anzustossen: dieser hier
+        // wartet ja selbst auf Phase 2 und nimmt die Zusatzquellen mit.
+        // Ohne diese Sperre schrieben beide Durchlaeufe die Liste — gemessen
+        // 2448 und 2451 Videos im Abstand von 0,2s, also ein sichtbares
+        // Nachrutschen um drei Kacheln.
+        if (!silent) {
+          _aggregatLaeuft = true;
+          await _warteAufZusatzquellen();
+        }
 
         final ctx = _buildCtx();
         // VBW-Playlists + Bridge-Virtual-Tournaments nur wenn der VBTV-
@@ -2968,9 +2977,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e) {
       if (!silent && _videosLoadEpoch == epoch) setState(() => _errorMessage = S.connectionError(e.toString()));
     } finally {
+      if (!silent) _aggregatLaeuft = false;
       if (!silent && _videosLoadEpoch == epoch) setState(() => _isLoading = false);
     }
   }
+
+  /// Baut gerade ein sichtbarer Aggregations-Durchlauf die Liste auf?
+  bool _aggregatLaeuft = false;
 
   void _openVideo(VideoItem video) {
     if (video.isTwitch) {
