@@ -4,6 +4,7 @@ import 'package:video_player/video_player.dart';
 import 'dart:async';
 import 'dart:io';
 import '../l10n/strings.dart';
+import '../widgets/end_splash.dart';
 
 class _BestVariant {
   final String url;
@@ -17,7 +18,20 @@ class PlayerScreen extends StatefulWidget {
   final String title;
   final String streamUrl;
 
-  const PlayerScreen({super.key, required this.title, required this.streamUrl});
+  /// Kuenstliche 2h-Timeline fuer VBW-Highlights, deren echte Datei kuerzer
+  /// ist als das Match. Die komplette Mechanik dahinter (schwarzer Bereich
+  /// nach dem Dateiende, virtuelle Position, Rueckseek ins echte Video) war
+  /// hier schon vorhanden — sie wurde nur nie eingeschaltet, weil dieser
+  /// Player bisher ausschliesslich Laola/GBT-Streams mit echter Dauer
+  /// bekommen hat. Fuer VBW lief die 2h-Ansicht im WebView-Player.
+  final bool twoHourMode;
+
+  const PlayerScreen({
+    super.key,
+    required this.title,
+    required this.streamUrl,
+    this.twoHourMode = false,
+  });
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -39,6 +53,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Millisekunden vor `initialize()` abgeschlossen ist.
   Duration get _displayDuration {
     final d = _controller.value.duration;
+    // 2h-Modus: Timeline auf zwei Stunden aufziehen, ABER eine laengere
+    // Datei nie abschneiden. Exakt dieselbe Regel wie im WebView-Player
+    // (webview_player_screen.dart::_effectiveDuration, dort als
+    // `useRealDuration || _realDuration > 7200`), damit sich der Modus in
+    // beiden Playern gleich anfuehlt.
+    if (widget.twoHourMode) {
+      return d > const Duration(hours: 2) ? d : const Duration(hours: 2);
+    }
     return d > Duration.zero ? d : const Duration(hours: 2);
   }
   Duration _fakePosition = Duration.zero;
@@ -471,6 +493,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         child: VideoPlayer(_controller),
                       ),
                     ),
+
+                  // Im 2h-Modus laeuft die Timeline nach dem Dateiende weiter.
+                  // Dieselbe Ansicht wie im WebView-Player, damit sich der
+                  // Modus in beiden gleich anfuehlt (vorher blieb hier nur
+                  // ein leerer schwarzer Bildschirm — der Zweig war bis jetzt
+                  // gar nicht erreichbar, weil _displayDuration nie laenger
+                  // als die Datei war).
+                  if (_isInBlackScreen) const EndSplash(),
 
                   // Links = zurück, rechts = vor
                   Row(

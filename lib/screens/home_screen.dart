@@ -2837,13 +2837,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 456-708ms statt 10-15s, und ohne OAuth-Roundtrip also ohne
     // verbrauchten Device-Slot.
     //
-    // BEWUSST eingeschraenkt auf Replays ohne 2h-Modus, damit nichts
-    // verloren geht: der native PlayerScreen kennt weder die kuenstliche
-    // 2h-Timeline fuer VBW-Highlights (player_screen.dart:37) noch
-    // seekToLive, und die 'needs_login'-Erkennung haengt ebenfalls am
-    // WebView-Pfad. Live-Videos und der 2h-Modus laufen deshalb unveraendert
-    // weiter wie bisher.
-    final darfSchnellweg = !video.isLive && !seekToLive && !_twoHourMode;
+    // Eingeschraenkt auf Replays: fuer Live-Streams haengt seekToLive und die
+    // Live-Kante am WebView-Pfad, ebenso die 'needs_login'-Erkennung. Der
+    // 2h-Modus laeuft dagegen mit, seit PlayerScreen ihn kann — die Regel
+    // dort ist dieselbe wie in der WebView.
+    final darfSchnellweg = !video.isLive && !seekToLive;
     if (darfSchnellweg) {
       final url = await VbwClientFeed.signedStreamUrl(
         video.id,
@@ -2851,7 +2849,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       if (url != null && mounted) {
         await Navigator.push(context, MaterialPageRoute(
-          builder: (_) => PlayerScreen(title: video.teams, streamUrl: url),
+          builder: (_) => PlayerScreen(
+            title: video.teams,
+            streamUrl: url,
+            twoHourMode: _twoHourMode,
+          ),
         ));
         return;
       }

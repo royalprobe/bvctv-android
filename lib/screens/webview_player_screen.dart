@@ -8,12 +8,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
-import '../app_variant.dart';
 import '../l10n/strings.dart';
+import '../widgets/end_splash.dart';
 
 /// WebView-basierter Player fuer VBW-Inhalte (JW Player im eingebetteten
 /// Browser). Fuer Laola-/Twitch-Streams gibt es stattdessen den nativen
@@ -958,64 +957,10 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen>
       backgroundColor: Colors.black,
       body: Stack(children: [
           _buildWebViewWidget(),
-          // Schwarzes Overlay im Black-Screen-Modus
-          if (_isInBlackScreen)
-            Positioned.fill(child: Container(
-              color: Colors.black,
-              child: Center(child: AppVariant.showClubBranding
-                // Vereins-Build: orange Kapsel mit "Powered by" + BVC-Logo.
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
-                    decoration: BoxDecoration(
-                      color: Colors.orange,
-                      borderRadius: BorderRadius.circular(1000),
-                    ),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Text('Powered by',
-                        style: TextStyle(color: Colors.black54, fontSize: 15, letterSpacing: 2, fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 20),
-                      GestureDetector(
-                        onTap: () => launchUrl(Uri.parse('https://www.instagram.com/bvc_lustenau/'),
-                            mode: LaunchMode.externalApplication),
-                        child: Image.asset('assets/bvc_logo.png', width: 260),
-                      ),
-                    ]),
-                  )
-                // Neutrale Variante: echter Kreis (BoxShape.circle, feste
-                // Kantenlaenge) statt der Kapsel — die passt sich sonst dem
-                // Inhalt an und wird zum Oval. Darin das App-Logo mit dem
-                // Hinweis darunter. Bewusst die freigestellte Logo-Fassung:
-                // bvctv_logo.png hat KEIN Alpha und wuerde als weisse Flaeche
-                // auf dem Orange kleben.
-                : Builder(builder: (ctx) {
-                    final d = MediaQuery.of(ctx).size.shortestSide * 0.62;
-                    return Container(
-                      width: d,
-                      height: d,
-                      decoration: const BoxDecoration(
-                        color: Colors.orange,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/bvctv_logo_transparent.png',
-                              width: d * 0.5, height: d * 0.5, fit: BoxFit.contain),
-                          SizedBox(height: d * 0.03),
-                          Text(S.blackScreenHint,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.black.withValues(alpha: 0.55),
-                              fontSize: d * 0.062,
-                              fontWeight: FontWeight.bold,
-                            )),
-                        ],
-                      ),
-                    );
-                  }),
-              ),
-            )),
+          // Schwarzes Overlay im Black-Screen-Modus. Inhalt liegt in
+          // widgets/end_splash.dart, weil der native PlayerScreen dieselbe
+          // Ansicht braucht.
+          if (_isInBlackScreen) const EndSplash(),
 
           // Schwarze Abdeckung bis Player bereit ist
           if (!_playerReady)
