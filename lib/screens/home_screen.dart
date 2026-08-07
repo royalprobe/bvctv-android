@@ -3027,11 +3027,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     //
     // VORERST AUS — siehe _vbwSchnellwegAktiv.
     //
-    // Eingeschraenkt auf Replays: fuer Live-Streams haengt seekToLive und die
-    // Live-Kante am WebView-Pfad, ebenso die 'needs_login'-Erkennung. Der
-    // 2h-Modus laeuft dagegen mit, seit PlayerScreen ihn kann — die Regel
-    // dort ist dieselbe wie in der WebView.
-    final darfSchnellweg = _vbwSchnellwegAktiv && !video.isLive && !seekToLive;
+    // Gilt inzwischen auch fuer Livestreams. Was dort am WebView-Pfad hing:
+    //   - Live-Kante: ExoPlayer steigt bei Live von selbst dort ein, das
+    //     entspricht "Live einsteigen".
+    //   - "Vom Anfang an": jetzt ueber startAtBeginning, das an den Anfang
+    //     des DVR-Fensters springt. Wie weit das reicht, bestimmt der
+    //     Stream — bis zum Matchbeginn muss es nicht zurueckreichen. Ueber
+    //     die WebView hat "Vom Anfang an" laut Simon ohnehin nie
+    //     funktioniert, beide Wege landeten am Live-Punkt.
+    //   - 'needs_login'-Erkennung: faellt beim Schnellweg weg. Nicht
+    //     dramatisch — laeuft die Session ab, liefert client-feed keine URL
+    //     mehr und es geht unten sowieso den WebView-Weg weiter, der die
+    //     Erkennung hat.
+    final darfSchnellweg = _vbwSchnellwegAktiv;
     if (darfSchnellweg) {
       final url = await VbwClientFeed.signedStreamUrl(
         video.id,
@@ -3043,6 +3051,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             title: video.teams,
             streamUrl: url,
             twoHourMode: _twoHourMode,
+            startAtBeginning: video.isLive && !seekToLive,
           ),
         ));
         return;

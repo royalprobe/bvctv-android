@@ -26,11 +26,21 @@ class PlayerScreen extends StatefulWidget {
   /// bekommen hat. Fuer VBW lief die 2h-Ansicht im WebView-Player.
   final bool twoHourMode;
 
+  /// Bei Livestreams an den Anfang des verfuegbaren Fensters springen statt
+  /// an der Live-Kante einzusteigen ("Vom Anfang an" im Live-Dialog).
+  ///
+  /// Wie weit das zurueckreicht, bestimmt das DVR-Fenster des Streams — bis
+  /// zum tatsaechlichen Matchbeginn muss es nicht reichen. Ohne das Flag
+  /// startet ExoPlayer bei Live von selbst an der Live-Kante, was "Live
+  /// einsteigen" entspricht.
+  final bool startAtBeginning;
+
   const PlayerScreen({
     super.key,
     required this.title,
     required this.streamUrl,
     this.twoHourMode = false,
+    this.startAtBeginning = false,
   });
 
   @override
@@ -267,6 +277,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
       httpHeaders: headers,
     );
     await _controller.initialize();
+    // "Vom Anfang an" bei Livestreams: an den Anfang des DVR-Fensters
+    // springen. ExoPlayer startet bei Live sonst an der Live-Kante.
+    if (widget.startAtBeginning) {
+      await _controller.seekTo(Duration.zero).catchError((e) {
+        debugPrint('[player] Sprung an den Anfang nicht moeglich: $e');
+      });
+    }
     setState(() {
       _isInitialized = true;
       _isPlaying = true;
