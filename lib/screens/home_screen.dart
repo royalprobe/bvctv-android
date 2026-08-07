@@ -2833,8 +2833,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           kopfOffen = 0;
           kopfNotbremse?.cancel();
           if (silent) return;
-          // Sofort zeigen statt auf das naechste Paket zu warten: die
-          // langsamen Playlists koennen Sekunden brauchen.
+          // NUR anzeigen wenn Zwischenstaende ueberhaupt erlaubt sind. Ohne
+          // diese Pruefung ging der Ladescreen trotzdem weg: publish() wurde
+          // hier direkt gerufen und umging den Schalter — gemessen erschienen
+          // weiter 343 Kacheln nach 7s statt der vollstaendigen Liste.
+          if (nurNotbremse) return;
           publishTimer?.cancel();
           publishPending = false;
           publish();
