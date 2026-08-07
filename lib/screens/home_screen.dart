@@ -2733,6 +2733,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // die Sammlung wieder leer, und der User wuerde die Liste erst
         // schrumpfen und dann wieder wachsen sehen.
         final collected = <VideoItem>[];
+        // Items der Kopf-Quellen getrennt mitfuehren. Beim ERSTEN Anzeigen
+        // wird nur diese Teilmenge gezeigt — siehe publish().
+        final kopfItems = <VideoItem>[];
         final seen = <String>{};
         Timer? publishTimer;
         var publishPending = false;
@@ -2742,7 +2745,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         void publish() {
           publishPending = false;
           if (_videosLoadEpoch != epoch || !mounted) return;
-          final snapshot = [...collected]..sort(_videoOrder);
+          // NUR die Kopf-Quellen zeigen, nicht alles was zufaellig schon
+          // fertig ist.
+          //
+          // Gemessen auf dem Fire Stick: die Liste erschien mit 1268 Videos
+          // und wuchs danach ueber fuenf Sekunden auf 2465 — rund 1200
+          // Kacheln wurden nachtraeglich einsortiert. Der Grund war nicht
+          // fehlende Geduld, sondern dass hier ALLES veroeffentlicht wurde
+          // was gerade vorlag: darunter Playlists, die spaeter von noch
+          // neueren ueberholt werden, weshalb sich mitten in der Liste
+          // Positionen verschoben.
+          //
+          // Die Kopf-Quellen (drei juengste Turniere + Bridge + Laola +
+          // Twitch) sind in sich vollstaendig. Alles Uebrige stammt aus
+          // AELTEREN Turnieren und sortiert sich damit zwangslaeufig
+          // darunter ein — es kann den sichtbaren Anfang nicht mehr
+          // verschieben. Der vollstaendige Stand wird am Ende in einem Zug
+          // gesetzt (siehe unten).
+          final snapshot = [...kopfItems]..sort(_videoOrder);
           setState(() {
             _videos = snapshot;
             // Sobald das erste Paket steht, weg mit dem Ladescreen.
@@ -2815,9 +2835,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           kopfNotbremse = Timer(const Duration(seconds: 6), kopfFertig);
         }
 
+        // Kopf-Quellen zum Nachschauen, damit ihre Items zusaetzlich in
+        // kopfItems landen. Identity-Vergleich reicht: es sind dieselben
+        // Future-Objekte wie in sources.
+        final kopfSet = Set<Future<List<VideoItem>>>.identity()
+          ..addAll(kopfQuellen);
+
         await Future.wait(sources.map((f) => f.then((items) {
+              final istKopf = kopfSet.contains(f);
               for (final v in items) {
-                if (seen.add(v.id)) collected.add(v);
+                if (seen.add(v.id)) {
+                  collected.add(v);
+                  if (istKopf) kopfItems.add(v);
+                }
               }
               schedulePublish();
             })));
