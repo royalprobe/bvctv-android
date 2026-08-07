@@ -160,10 +160,21 @@ class TwitchStream {
   static const _clientId = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
   static const _usherBase = 'https://usher.ttvnw.net';
 
+  /// Warum der letzte extractMasterUrl-Aufruf leer ausging, sofern Twitch
+  /// einen Grund genannt hat ('GEOBLOCKED', sonst der rohe reason-String).
+  /// null heisst: kein Sperrgrund, also Netz- oder API-Problem.
+  ///
+  /// Bewusst ein statisches Feld statt eines Rueckgabetyps — es gibt genau
+  /// einen Aufrufer (home_screen::_openTwitchVideo) und der liest es
+  /// unmittelbar nach dem await, ohne dass dazwischen ein zweiter Abruf
+  /// laufen kann.
+  static String? lastAbsageGrund;
+
   /// videoId ist entweder eine numerische VOD-ID oder `live-<login>`.
   /// Liefert die signed usher.ttvnw.net-Master-m3u8 URL, oder null bei
   /// Netz-/API-Fehler.
   static Future<String?> extractMasterUrl(String videoId) async {
+    lastAbsageGrund = null;
     try {
       final isLive = videoId.startsWith('live-');
       final login = isLive ? videoId.substring(5) : '';
@@ -214,6 +225,19 @@ class TwitchStream {
         return null;
       }
 
+      // Bei gesperrten Inhalten liefert Twitch TROTZDEM ein Token-Objekt,
+      // die Absage steckt erst im JSON darin:
+      //   {"authorization":{"forbidden":true,"reason":"GEOBLOCKED"}, ...}
+      // Ungeprueft bauen wir daraus eine usher-URL, der Player laedt sie und
+      // scheitert ohne verwertbare Meldung. Gemessen am 08.08.2026 fuer alle
+      // GBT-VODs des Kanals spontent, von oesterreichischer Leitung aus.
+      final grund = _absageGrund(tokenValue.toString());
+      if (grund != null) {
+        debugPrint('[twitch-stream] verweigert: $grund');
+        lastAbsageGrund = grund;
+        return null;
+      }
+
       final rand = Random().nextInt(10000000);
       final psid = _randomHex(32);
       final params = <String, String>{
@@ -244,6 +268,21 @@ class TwitchStream {
       debugPrint('[twitch-stream] extract err: $e');
       return null;
     }
+  }
+
+  /// Liest den Absage-Grund aus dem Token-JSON, oder null wenn frei.
+  /// Kaputtes JSON gilt bewusst als "frei" — dann soll der Player es
+  /// versuchen duerfen statt an unserer Vorpruefung zu scheitern.
+  static String? _absageGrund(String tokenValue) {
+    try {
+      final decoded = jsonDecode(tokenValue);
+      final auth = decoded is Map ? decoded['authorization'] : null;
+      if (auth is Map && auth['forbidden'] == true) {
+        final r = auth['reason'];
+        return (r is String && r.isNotEmpty) ? r : 'FORBIDDEN';
+      }
+    } catch (_) {}
+    return null;
   }
 
   static String _randomHex(int len) {

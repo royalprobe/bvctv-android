@@ -3024,16 +3024,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted && Navigator.canPop(context)) Navigator.pop(context);
     if (!mounted) return;
     if (url == null) {
+      // Twitch nennt bei Sperren einen Grund — dann NICHT "API umgebaut"
+      // behaupten. Fuer die GBT-Videos ist es durchgaengig GEOBLOCKED, und
+      // auf twitch.tv selbst erscheint derselbe Fehler (#4000); ein Verweis
+      // dorthin waere eine Sackgasse.
+      final gesperrt = TwitchStream.lastAbsageGrund == 'GEOBLOCKED';
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: const Color(0xFF1A1A1A),
-          title: Text(S.isEn ? 'Stream unavailable' : 'Stream nicht verfuegbar',
+          title: Text(
+              gesperrt
+                  ? (S.isEn ? 'Blocked in your country' : 'In deinem Land gesperrt')
+                  : (S.isEn ? 'Stream unavailable' : 'Stream nicht verfuegbar'),
               style: const TextStyle(color: Colors.white)),
           content: Text(
-            S.isEn
-                ? 'The Twitch playback token could not be fetched. Twitch may have changed their API.'
-                : 'Der Twitch-Playback-Token konnte nicht geholt werden. Vielleicht hat Twitch die API umgebaut.',
+            gesperrt
+                ? (S.isEn
+                    ? 'Twitch does not release this GBT video here. This is not an app problem — twitch.tv shows the same error.'
+                    : 'Twitch gibt dieses GBT-Video hier nicht frei. Das ist keine Stoerung der App — auf twitch.tv erscheint derselbe Fehler.')
+                : (S.isEn
+                    ? 'The Twitch playback token could not be fetched. Twitch may have changed their API.'
+                    : 'Der Twitch-Playback-Token konnte nicht geholt werden. Vielleicht hat Twitch die API umgebaut.'),
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
