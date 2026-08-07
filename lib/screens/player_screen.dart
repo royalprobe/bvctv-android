@@ -155,6 +155,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// UND Variants/Segmente.
   bool get _isTwitchStream => widget.streamUrl.contains('ttvnw.net');
 
+  /// VBW liefert ueber JW Player aus. Ein laola1-Referer hat dort nichts
+  /// verloren — er ist bestenfalls nutzlos und kann wie bei Twitch als
+  /// verdaechtig gelten.
+  bool get _isVbwStream =>
+      widget.streamUrl.contains('jwplayer.com') ||
+      widget.streamUrl.contains('jwplive.com') ||
+      widget.streamUrl.contains('jwpsrv.com');
+
+  /// Nur echte Laola-Streams (Akamai) brauchen den laola1-Referer.
+  bool get _needsLaolaHeaders => !_isTwitchStream && !_isVbwStream;
+
   /// Fetcht das Master-m3u8 selbst (über dart:io HttpClient damit wir Set-
   /// Cookie-Header lesen können), parsed die Variants, und gibt die beste
   /// (höchste Auflösung, sonst höchste Bitrate) zurück. Cookies aus der
@@ -167,7 +178,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
       try {
         final req = await client.getUrl(Uri.parse(masterUrl));
-        if (!_isTwitchStream) {
+        if (_needsLaolaHeaders) {
           req.headers.set('Referer', 'https://www.laola1.at/');
           req.headers.set('Origin', 'https://www.laola1.at');
         }
@@ -183,6 +194,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
             .toList();
         final cookieHeader = cookiePairs.join('; ');
         final body = await res.transform(const SystemEncoding().decoder).join();
+
+        // Getrennte Tonspur? Dann NICHT auf eine Variante festnageln.
+        //
+        // Bei VBW enthalten die Varianten nur Video, der Ton liegt in einer
+        // eigenen Spur (#EXT-X-MEDIA:TYPE=AUDIO). Wer hier eine Variante
+        // pinnt, spielt Bild OHNE Ton — genau das Tonproblem, an dem der
+        // schnelle VBTV-Weg gescheitert ist. Laola ist nicht betroffen, dort
+        // steckt der Ton in der Variante selbst.
+        //
+        // ExoPlayer setzt Video- und Tonspur selbst zusammen, wenn man ihm
+        // den Master gibt; die Qualitaetswahl uebernimmt dann dessen ABR.
+        if (body.contains('EXT-X-MEDIA:TYPE=AUDIO')) {
+          debugPrint('[player] getrennte Tonspur erkannt -> Master + ABR '
+              'statt gepinnter Variante (sonst Bild ohne Ton)');
+          return null;
+        }
+
         final lines = body.split('\n');
         final base = Uri.parse(masterUrl);
         int bestHeight = 0;
@@ -225,7 +253,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final best = await _pickBestVariantWithCookies(widget.streamUrl);
     final playUrl = best?.url ?? widget.streamUrl;
     final headers = <String, String>{
-      if (!_isTwitchStream) ...{
+      if (_needsLaolaHeaders) ...{
         'Referer': 'https://www.laola1.at/',
         'Origin': 'https://www.laola1.at',
       },

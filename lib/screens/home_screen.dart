@@ -2990,7 +2990,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// reichen — die Variant- und Segment-URLs darin sind absolut, es muss
   /// also nur die eine 3-KB-Datei umgeschrieben werden. Ungetestet, deshalb
   /// erst nach einer echten Probe am Geraet einschalten.
-  static const bool _vbwSchnellwegAktiv = false;
+  static const bool _vbwSchnellwegAktiv = true;
 
   /// Vorlader stilllegen, bevor ein Player aufgeht.
   ///
