@@ -2828,6 +2828,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ));
   }
 
+  /// Schnellweg fuer VBTV (signierte URL + nativer Player) — VORERST AUS.
+  ///
+  /// Der Weg selbst funktioniert: 456-708ms statt 10-15s und 1080p statt
+  /// 720p beim Start. Er hat aber KEINEN TON, und der Grund liegt nicht bei
+  /// uns:
+  ///
+  /// VBWs HLS-Manifest ist getrennt aufgebaut — die Videospuren enthalten
+  /// kein Audio, der Ton liegt in einer eigenen Spur (EXT-X-MEDIA:TYPE=AUDIO).
+  /// Beide sind abrufbar (je HTTP 200, 1740 Segmente). Nur geben die
+  /// Videospuren im CODECS-Feld faelschlich einen Audio-Codec mit an
+  /// ("mp4a.40.2,avc1.64002a") OBWOHL sie auf die separate Audiogruppe
+  /// verweisen. ExoPlayer glaubt dem CODECS-Feld, haelt die Spur fuer gemuxt
+  /// und holt die Tonspur deshalb nie -> Bild ohne Ton.
+  ///
+  /// Laola laeuft im selben nativen Player MIT Ton, weil dessen Stream
+  /// gemuxt ist. Und die Web-App hat Ton, weil hls.js die Audiogruppe
+  /// korrekt aufloest.
+  ///
+  /// Der Fix waere, das Master-Manifest vor dem Abspielen umzuschreiben (den
+  /// Audio-Codec aus CODECS entfernen, damit ExoPlayer die Audiogruppe
+  /// benutzt) und es dem Player aus einem lokalen Mini-HTTP-Server zu
+  /// reichen — die Variant- und Segment-URLs darin sind absolut, es muss
+  /// also nur die eine 3-KB-Datei umgeschrieben werden. Ungetestet, deshalb
+  /// erst nach einer echten Probe am Geraet einschalten.
+  static const bool _vbwSchnellwegAktiv = false;
+
   /// Vorlader stilllegen, bevor ein Player aufgeht.
   ///
   /// Der Preload ist eine 1x1 Pixel grosse WebView, die VBWs Player-Seite
@@ -2861,11 +2887,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 456-708ms statt 10-15s, und ohne OAuth-Roundtrip also ohne
     // verbrauchten Device-Slot.
     //
+    // VORERST AUS — siehe _vbwSchnellwegAktiv.
+    //
     // Eingeschraenkt auf Replays: fuer Live-Streams haengt seekToLive und die
     // Live-Kante am WebView-Pfad, ebenso die 'needs_login'-Erkennung. Der
     // 2h-Modus laeuft dagegen mit, seit PlayerScreen ihn kann — die Regel
     // dort ist dieselbe wie in der WebView.
-    final darfSchnellweg = !video.isLive && !seekToLive;
+    final darfSchnellweg = _vbwSchnellwegAktiv && !video.isLive && !seekToLive;
     if (darfSchnellweg) {
       final url = await VbwClientFeed.signedStreamUrl(
         video.id,
