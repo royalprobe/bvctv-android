@@ -6,6 +6,7 @@ VideoItem item({
   DateTime? matchDate,
   DateTime? scheduledEnd,
   String? linkUrl,
+  int duration = 0,
 }) =>
     VideoItem(
       id: 'x',
@@ -15,7 +16,7 @@ VideoItem item({
       round: 'Final',
       tournament: 'Test',
       thumbnailUrl: '',
-      duration: 0,
+      duration: duration,
       matchDate: matchDate,
       eventState: eventState,
       scheduledEnd: scheduledEnd,
@@ -34,6 +35,32 @@ void main() {
       expect(item(eventState: 'VOD_PUBLIC').isLive, isFalse);
       expect(item(eventState: 'PRE_LIVE').isLive, isFalse);
       expect(item(eventState: 'INSTANT_VOD').isLive, isFalse);
+    });
+
+    /// VBW laesst event_state nach Spielende teils auf LIVE stehen. Beide
+    /// Gegenproben muessen greifen, sonst bleibt der LIVE-Badge haengen und
+    /// die Kachel steht weiter ganz oben.
+    test('nicht mehr live sobald eine Dauer gesetzt ist', () {
+      expect(item(eventState: 'LIVE', duration: 2417).isLive, isFalse);
+      expect(item(eventState: 'LIVE_PUBLISHED', duration: 1).isLive, isFalse);
+    });
+    test('nicht mehr live wenn das Zeitfenster vorbei ist', () {
+      expect(
+          item(
+            eventState: 'LIVE',
+            scheduledEnd: now.subtract(const Duration(minutes: 5)),
+          ).isLive,
+          isFalse);
+    });
+    test('bleibt live solange das Fenster laeuft und keine Dauer da ist', () {
+      expect(
+          item(
+            eventState: 'LIVE',
+            scheduledEnd: now.add(const Duration(hours: 2)),
+          ).isLive,
+          isTrue);
+      // Laola/Twitch bauen ihre Livestreams ohne scheduledEnd.
+      expect(item(eventState: 'LIVE').isLive, isTrue);
     });
   });
 

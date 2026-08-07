@@ -38,7 +38,30 @@ class VideoItem {
   // ueber TwitchStream.extractMasterUrl und dem native PlayerScreen.
   bool get isTwitch => linkUrl != null && linkUrl!.startsWith('twitch:');
   String? get twitchVideoId => isTwitch ? linkUrl!.substring(7) : null;
-  bool get isLive => eventState == 'LIVE' || eventState == 'LIVE_PUBLISHED';
+  /// VBW laesst event_state nach Spielende teils auf LIVE stehen — beobachtet
+  /// an Eintraegen, deren Playlist bereits EXT-X-ENDLIST hatte, also
+  /// nachweislich beendet war. Der LIVE-Badge blieb haengen und die Kachel
+  /// wurde weiter nach oben einsortiert.
+  ///
+  /// Zwei Gegenproben, an echten Daten geprueft (Hamburg 2026):
+  ///   * duration ist 0, solange nichts fertig aufgezeichnet ist (PRE_LIVE),
+  ///     und wird beim Uebergang auf INSTANT_VOD/VOD_PUBLIC gesetzt (gemessen
+  ///     2417-3131 s). Eine gesetzte Dauer heisst also: fertig.
+  ///   * scheduledEnd steht immer exakt 8 h nach dem Start, ist also kein
+  ///     echtes Spielende — taugt aber als harte Obergrenze. Danach laeuft
+  ///     sicher nichts mehr.
+  ///
+  /// Die selbst gebauten Laola-/Twitch-Livestreams sind davon nicht betroffen:
+  /// die setzen duration 0 und scheduledEnd null.
+  bool get isLive {
+    if (eventState != 'LIVE' && eventState != 'LIVE_PUBLISHED') return false;
+    if (duration > 0) return false;
+    final ende = scheduledEnd;
+    if (ende != null && ende.toUtc().isBefore(DateTime.now().toUtc())) {
+      return false;
+    }
+    return true;
+  }
   bool get isInstantVod {
     if (eventState != 'INSTANT_VOD') return false;
     final end = scheduledEnd ?? matchDate;

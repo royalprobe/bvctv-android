@@ -756,11 +756,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (localSuccess > 0) successCount++;
           for (final entry in entries) {
             if (entry == null) continue;
-            final state = entry['extensions']?['event_state'] as String? ?? '';
-            if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
-              final item = _itemFromJson(entry);
-              if (seen.add(item.id)) liveItems.add(item);
-            }
+            // Nicht den rohen event_state pruefen: VBW laesst ihn nach
+            // Spielende teils auf LIVE stehen. VideoItem.isLive haelt
+            // dagegen (Dauer gesetzt / Zeitfenster vorbei).
+            final item = _itemFromJson(entry);
+            if (item.isLive && seen.add(item.id)) liveItems.add(item);
           }
           return;
         }
@@ -775,11 +775,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final data = jsonDecode(res.body);
         final entries = data['entry'] as List? ?? [];
         for (final entry in entries) {
-          final state = entry['extensions']?['event_state'] as String? ?? '';
-          if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
-            final item = _itemFromJson(entry);
-            if (seen.add(item.id)) liveItems.add(item);
-          }
+          final item = _itemFromJson(entry);
+          if (item.isLive && seen.add(item.id)) liveItems.add(item);
         }
         // Bridge-Extras für diese Playlist (PRE_LIVE/LIVE-Spiele die VBW noch
         // nicht in die offizielle Playlist gelegt hat) ebenfalls auf LIVE
@@ -812,12 +809,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }));
             for (final entry in extras) {
               if (entry == null) continue;
-              final state =
-                  entry['extensions']?['event_state'] as String? ?? '';
-              if (state == 'LIVE' || state == 'LIVE_PUBLISHED') {
-                final item = _itemFromJson(entry);
-                if (seen.add(item.id)) liveItems.add(item);
-              }
+              final item = _itemFromJson(entry);
+              if (item.isLive && seen.add(item.id)) liveItems.add(item);
             }
           }
         }
