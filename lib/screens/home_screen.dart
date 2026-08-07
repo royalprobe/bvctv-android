@@ -1785,6 +1785,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Die Aggregation zieht diese Quellen mit — ihr Cache ist veraltet.
         _videosCache.remove(_allId);
         _mark('zusatzquellen eingehaengt (${fresh.length} turniere)');
+        _phase2Bereit = true;
       }
 
       if (_currentPlaylistId == _allId) {
@@ -3092,12 +3093,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Aggregation kurz darauf, bevor sie ueberhaupt etwas anzeigt.
   bool _zusatzQuellenBereit = false;
 
+  /// Ist Phase 2 der Turnierliste durch (YouTube-Feeds, Laola-Mediathek,
+  /// Twitch)? Die liefert nochmal rund 100 Videos — gemessen 2366 im ersten
+  /// Durchlauf gegen 2463 im zweiten. Ohne dieses Warten baut sich die Liste
+  /// deshalb ein zweites Mal um, auch wenn der Livestream-Scrape laengst da
+  /// ist.
+  bool _phase2Bereit = false;
+
   /// Wartet darauf, mit Frist. Laeuft der Scrape in einen Fehler oder haengt,
   /// soll die Uebersicht trotzdem erscheinen — dann eben mit dem
   /// Nachrutschen, das vorher der Normalfall war.
   Future<void> _warteAufZusatzquellen() async {
-    final frist = DateTime.now().add(const Duration(seconds: 6));
-    while (!_zusatzQuellenBereit && DateTime.now().isBefore(frist)) {
+    final frist = DateTime.now().add(const Duration(seconds: 12));
+    while ((!_zusatzQuellenBereit || !_phase2Bereit) &&
+        DateTime.now().isBefore(frist)) {
       await Future.delayed(const Duration(milliseconds: 120));
     }
   }
