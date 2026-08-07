@@ -25,6 +25,7 @@ import '../services/silent_login_flow.dart';
 import '../services/laola_stream_extractor.dart';
 import '../services/laola_livestream_scraper.dart';
 import '../services/twitch_api.dart';
+import '../services/vbw_client_feed.dart';
 import 'player_screen.dart';
 import 'webview_player_screen.dart';
 
@@ -2829,6 +2830,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _launchPlayer(VideoItem video, {required bool seekToLive}) async {
     if (!await _ensureLoggedIn()) return;
     if (!mounted) return;
+
+    // Schnellweg: die signierte Stream-URL direkt bei VBW holen und im
+    // NATIVEN Player spielen, statt die komplette Player-Seite in einer
+    // WebView zu laden (siehe VbwClientFeed). In der Web-Variante gemessen:
+    // 456-708ms statt 10-15s, und ohne OAuth-Roundtrip also ohne
+    // verbrauchten Device-Slot.
+    //
+    // BEWUSST eingeschraenkt auf Replays ohne 2h-Modus, damit nichts
+    // verloren geht: der native PlayerScreen kennt weder die kuenstliche
+    // 2h-Timeline fuer VBW-Highlights (player_screen.dart:37) noch
+    // seekToLive, und die 'needs_login'-Erkennung haengt ebenfalls am
+    // WebView-Pfad. Live-Videos und der 2h-Modus laufen deshalb unveraendert
+    // weiter wie bisher.
+    final darfSchnellweg = !video.isLive && !seekToLive && !_twoHourMode;
+    if (darfSchnellweg) {
+      final url = await VbwClientFeed.signedStreamUrl(
+        video.id,
+        accessToken: AuthState.token.value,
+      );
+      if (url != null && mounted) {
+        await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => PlayerScreen(title: video.teams, streamUrl: url),
+        ));
+        return;
+      }
+      // null -> nicht freigeschaltet oder Aufruf fehlgeschlagen: unten
+      // weiter wie vorher.
+    }
+
     final ctx = _buildCtx();
     final selfLink = Uri.encodeComponent(
       'https://zapp-5434-volleyball-tv.web.app/jw/media/${video.id}?disablePlayNext=false&withErrors=false&ctx=$ctx',
