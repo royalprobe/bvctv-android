@@ -141,8 +141,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<VideoItem> _computeAllVideos() {
-    final liveIds = _liveVideos.map((v) => v.id).toSet();
-    final merged = [..._liveVideos, ..._videos.where((v) => !liveIds.contains(v.id))];
+    // Nur Live-Videos vorne anstellen, die in _videos FEHLEN.
+    //
+    // Vorher wurden ALLE _liveVideos vorangestellt und aus _videos entfernt.
+    // Da _videos die laufenden Spiele ohnehin enthaelt und _videoOrder sie
+    // nach vorne sortiert, war das fuer die meisten nur ein Umsortieren —
+    // und weil _loadLiveAndUpcoming asynchron beim Start und danach JEDE
+    // MINUTE laeuft, sprangen die Kacheln dabei jedes Mal. Das war die
+    // Ursache fuer das Verschieben in den ersten Sekunden nach dem
+    // App-Start, unabhaengig von der Aggregation.
+    //
+    // Jetzt behalten bereits vorhandene Videos ihre Position, und der
+    // Auffrischer kann nur noch ergaenzen, was die Aggregation noch nicht
+    // hat (typisch: ein Spiel das gerade live gegangen ist).
+    final vorhandene = _videos.map((v) => v.id).toSet();
+    final fehlendeLive =
+        _liveVideos.where((v) => !vorhandene.contains(v.id)).toList();
+    final merged = [...fehlendeLive, ..._videos];
     // Source-Filter: _liveVideos wird nur alle 60s neu befuellt
     // (_loadLiveAndUpcoming) und kann bis dahin ein Twitch/Laola-Video
     // enthalten das der User gerade per Source-Toggle ausgeblendet hat —
