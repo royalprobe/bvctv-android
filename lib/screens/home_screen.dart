@@ -2819,6 +2819,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     if (!mounted) return;
+    _stopPreloadForPlayback();
     await Navigator.push(context, MaterialPageRoute(
       builder: (_) => PlayerScreen(
         title: video.teams,
@@ -2827,9 +2828,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ));
   }
 
+  /// Vorlader stilllegen, bevor ein Player aufgeht.
+  ///
+  /// Der Preload ist eine 1x1 Pixel grosse WebView, die VBWs Player-Seite
+  /// laedt und anspielt — mit Ton, stumm wird sie erst nachtraeglich per JS.
+  /// Sie haelt damit den Audio-Fokus von Android.
+  ///
+  /// Solange der Player selbst eine WebView war, ist das nicht aufgefallen.
+  /// Der NATIVE Player (ExoPlayer) bekommt den Fokus aber nicht, solange die
+  /// Preload-WebView ihn haelt — Ergebnis: Video laeuft, kein Ton. Und weil
+  /// der Vorlader beim Zurueckkehren in die Uebersicht sofort wieder
+  /// anspringt, blieb es danach bei JEDEM Video stumm.
+  ///
+  /// Waehrend ein Player offen ist, hat der Vorlader ohnehin keinen Zweck.
+  void _stopPreloadForPlayback() {
+    if (_preloadController == null && _preloadFocusTimer == null) return;
+    if (mounted) {
+      setState(_killPreload);
+    } else {
+      _killPreload();
+    }
+  }
+
   Future<void> _launchPlayer(VideoItem video, {required bool seekToLive}) async {
     if (!await _ensureLoggedIn()) return;
     if (!mounted) return;
+    _stopPreloadForPlayback();
 
     // Schnellweg: die signierte Stream-URL direkt bei VBW holen und im
     // NATIVEN Player spielen, statt die komplette Player-Seite in einer
