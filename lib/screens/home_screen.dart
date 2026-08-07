@@ -302,13 +302,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       PackageInfo.fromPlatform().then((i) { if (mounted) setState(() => _appVersion = i.version); });
       Future.delayed(const Duration(seconds: 10), _checkForUpdateOnce);
     }
-    // Laola1-Livestream-Scraper laeuft erst NACH dem App-Start, damit VBW-
-    // Playlists und Update-Check nicht durch einen externen Fetch verzoegert
-    // werden. Danach periodisch: die Court-IDs sind zwar den Tag ueber stabil,
-    // aber ein Turnier das WAEHREND der Session live geht wuerde sonst nie
-    // auftauchen — auf einem Fire Stick der tagelang laeuft heisst das: den
-    // ganzen Tag nichts Neues. Ein HTML-Abruf ist billig genug dafuer.
-    Future.delayed(const Duration(seconds: 8), _scrapeLaolaLivestreams);
+    // Laola1-Livestream-Scraper SOFORT starten, nicht mit Verzoegerung.
+    //
+    // Die 8 Sekunden waren der Hauptgrund, warum sich die Uebersicht nach dem
+    // Start noch sekundenlang umbaute: der Scrape liefert Laola-Livestreams,
+    // also Eintraege von HEUTE, und die sortieren sich ganz oben ein. Kam das
+    // Ergebnis erst nach 8s, wurde die schon sichtbare Liste noch einmal
+    // komplett ersetzt und alles verschob sich.
+    //
+    // Der Grund fuer die Verzoegerung — VBW-Playlists nicht durch einen
+    // externen Abruf ausbremsen — traegt nicht: das sind getrennte
+    // Verbindungen, und ein HTML-Abruf ist billig. Danach periodisch, damit
+    // ein Turnier das WAEHREND der Session live geht ueberhaupt auftaucht.
+    _scrapeLaolaLivestreams();
     _laolaScrapeTimer = Timer.periodic(
         _laolaScrapeInterval, (_) => _scrapeLaolaLivestreams());
   }
@@ -328,8 +334,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Neutrale Variante zeigt nur VBTV — der Scrape waere reiner Netz-Traffic
     // fuer Eintraege, die _visibleTournaments ohnehin sofort wegfiltert.
     // Greift fuer beide Aufrufer (Start-Delay und Aktualisieren-Button).
-    if (AppVariant.vbtvOnly) return;
-    final scraped = await LaolaLivestreamScraper.findBeachTournaments();
+    if (AppVariant.vbtvOnly) {
+      _zusatzQuellenBereit = true;
+      return;
+    }
+    final scraped = await LaolaLivestreamScraper.findBeachTournaments()
+        .catchError((e) {
+      debugPrint('[laola-scrape] fehlgeschlagen: $e');
+      return <Map<String, Object>>[];
+    });
+    // Ab hier gilt der Scrape als durchgelaufen — auch wenn nichts gefunden
+    // wurde. Sonst wartet die Aggregation auf etwas, das nie kommt.
+    _zusatzQuellenBereit = true;
     if (!mounted || scraped.isEmpty) return;
 
     // Pro Tournament die Court-IDs gegen /access/hls validieren und nicht
@@ -2774,6 +2790,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           publish();
         }
 
+        // Erst anzeigen, wenn der Laola-/Twitch-Scrape durch ist. Der
+        // liefert Eintraege von heute, die ganz oben landen — kommt sein
+        // Ergebnis nach dem ersten Anzeigen, wird die sichtbare Liste
+        // ersetzt und alles verschiebt sich. Genau das war das Zappeln in
+        // den ersten Sekunden nach dem Start.
+        //
+        // Kostet in der Regel keine Zeit: der Scrape startet jetzt sofort
+        // beim App-Start (vorher erst nach 8s) und ist meist schon fertig,
+        // bevor die VBW-Playlists durch sind.
+        if (!silent) {
+          await _warteAufZusatzquellen();
+        }
+
         if (!silent) {
           for (final f in kopfQuellen) {
             f.whenComplete(() {
@@ -2959,6 +2988,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         title: titel,
       ),
     ));
+  }
+
+  /// Ist der Laola-/Twitch-Scrape einmal durchgelaufen?
+  ///
+  /// Er liefert Eintraege von HEUTE, die sich ganz oben einsortieren. Wird
+  /// die Uebersicht vorher angezeigt, ersetzt sein Ergebnis die schon
+  /// sichtbare Liste und alles verschiebt sich. Deshalb wartet die
+  /// Aggregation kurz darauf, bevor sie ueberhaupt etwas anzeigt.
+  bool _zusatzQuellenBereit = false;
+
+  /// Wartet darauf, mit Frist. Laeuft der Scrape in einen Fehler oder haengt,
+  /// soll die Uebersicht trotzdem erscheinen — dann eben mit dem
+  /// Nachrutschen, das vorher der Normalfall war.
+  Future<void> _warteAufZusatzquellen() async {
+    final frist = DateTime.now().add(const Duration(seconds: 6));
+    while (!_zusatzQuellenBereit && DateTime.now().isBefore(frist)) {
+      await Future.delayed(const Duration(milliseconds: 120));
+    }
   }
 
   /// Wie viele der juengsten VBW-Playlists als "Kopf-Quelle" gelten, also
