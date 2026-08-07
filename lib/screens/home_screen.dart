@@ -2801,10 +2801,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         var kopfErledigt = false;
         Timer? kopfNotbremse;
 
+        // Zwischenstaende werden NICHT mehr angezeigt.
+        //
+        // Gemessen auf dem Fire Stick: erste Kacheln nach 3,2s mit 343
+        // Videos, komplett nach 8,0s mit 2463 — es kamen also 2120 Kacheln
+        // nachtraeglich dazu und wurden einsortiert. Genau das hat gestoert.
+        // Kopf-Quellen zuerst zu zeigen hat das nicht geloest, es hat nur den
+        // Anfang der Liste stabil gehalten.
+        //
+        // Jetzt bleibt der Ladescreen stehen, bis die Aggregation fertig ist.
+        // Das kostet rund 8 Sekunden statt 3 — vertretbar, seit der
+        // Laola-Scrape sofort startet (vorher waren es 15). Die Notbremse
+        // unten zeigt trotzdem an, falls eine Quelle haengt.
+        var nurNotbremse = true;
+
         void schedulePublish() {
           // Bei einem stillen Refresh NICHT schrittweise: die Sammlung startet
           // leer, der User saehe die Liste schrumpfen und wieder wachsen.
           if (silent || publishPending) return;
+          if (nurNotbremse) return;
           if (!kopfErledigt) return;
           publishPending = true;
           // Buendeln: 20 Quellen einzeln zu rendern hiesse 20 Sortierlaeufe
@@ -2844,10 +2859,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (--kopfOffen <= 0) kopfFertig();
             });
           }
-          // Notbremse: haengt eine Kopf-Quelle (10s HTTP-Timeout pro
-          // Playlist), soll die Uebersicht trotzdem erscheinen. Lieber ein
-          // spaeteres Nachrutschen als ein Ladescreen der steht.
-          kopfNotbremse = Timer(const Duration(seconds: 6), kopfFertig);
+          // Notbremse: haengt eine Quelle (10s HTTP-Timeout pro Playlist),
+          // soll die Uebersicht trotzdem erscheinen. Lieber ein spaeteres
+          // Nachrutschen als ein Ladescreen der steht.
+          kopfNotbremse = Timer(const Duration(seconds: 12), () {
+            kopfFertig();
+            nurNotbremse = false;
+            schedulePublish();
+          });
         }
 
         // Kopf-Quellen zum Nachschauen, damit ihre Items zusaetzlich in
