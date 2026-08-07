@@ -3054,15 +3054,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // (gemuxter Stream oder Fehler), wird die Original-Adresse benutzt
         // und ExoPlayer regelt die Qualitaet wie bisher selbst.
         //
-        // Festgenagelt wird nur bei Aufzeichnungen. Bei LIVE bleiben alle
-        // Stufen erhalten: die 1080p-Stufe liegt dort ueber 10 Mbit, und ein
-        // Livestream hat keinen Vorlauf zum Zurueckfallen — ein stockendes
-        // Bild waere schlimmer als eine Stufe weniger.
-        final spielUrl = await VbwManifestProxy.vorbereiten(
-              url,
-              besteFestnageln: !video.isLive,
-            ) ??
-            url;
+        // Festgenagelt wird AUCH bei Livestreams — auf Simons Wunsch. Die
+        // Stufe wird nach hoechster Auflaesung gewaehlt, nicht auf 1080p
+        // festgeschrieben: gibt es irgendwann 4K, wird die genommen.
+        //
+        // Der Preis, bewusst in Kauf genommen: bei Live gibt es damit kein
+        // Zurueckfallen auf eine niedrigere Stufe, wenn die Bandbreite
+        // einbricht — und ein Livestream hat keinen Vorlauf, aus dem er sich
+        // erholen koennte. Stockt das Bild, ist der Parameter hier der
+        // Hebel (besteFestnageln: !video.isLive).
+        final spielUrl = await VbwManifestProxy.vorbereiten(url) ?? url;
         if (!mounted) return;
         await Navigator.push(context, MaterialPageRoute(
           builder: (_) => PlayerScreen(
