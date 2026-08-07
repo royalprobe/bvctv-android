@@ -27,6 +27,7 @@ import '../services/laola_direct.dart';
 import '../services/laola_livestream_scraper.dart';
 import '../services/twitch_api.dart';
 import '../services/vbw_client_feed.dart';
+import '../services/vbw_manifest_proxy.dart';
 import 'player_screen.dart';
 import 'webview_player_screen.dart';
 
@@ -3046,10 +3047,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         accessToken: AuthState.token.value,
       );
       if (url != null && mounted) {
+        // Master umschreiben lassen: nur beste Videostufe + Tonspur. Damit
+        // gibt es hoechste Qualitaet ab dem ersten Bild UND Ton — ExoPlayer
+        // faengt sonst unten an und klettert erst hoch (beobachtet 540p
+        // bzw. 720p in den ersten Sekunden). Liefert die Umschreibung null
+        // (gemuxter Stream oder Fehler), wird die Original-Adresse benutzt
+        // und ExoPlayer regelt die Qualitaet wie bisher selbst.
+        //
+        // Festgenagelt wird nur bei Aufzeichnungen. Bei LIVE bleiben alle
+        // Stufen erhalten: die 1080p-Stufe liegt dort ueber 10 Mbit, und ein
+        // Livestream hat keinen Vorlauf zum Zurueckfallen — ein stockendes
+        // Bild waere schlimmer als eine Stufe weniger.
+        final spielUrl = await VbwManifestProxy.vorbereiten(
+              url,
+              besteFestnageln: !video.isLive,
+            ) ??
+            url;
+        if (!mounted) return;
         await Navigator.push(context, MaterialPageRoute(
           builder: (_) => PlayerScreen(
             title: video.teams,
-            streamUrl: url,
+            streamUrl: spielUrl,
             twoHourMode: _twoHourMode,
             startAtBeginning: video.isLive && !seekToLive,
           ),
