@@ -23,6 +23,7 @@ import '../services/auth_service.dart';
 import '../services/auth_state.dart';
 import '../services/silent_login_flow.dart';
 import '../services/laola_stream_extractor.dart';
+import '../services/laola_direct.dart';
 import '../services/laola_livestream_scraper.dart';
 import '../services/twitch_api.dart';
 import '../services/vbw_client_feed.dart';
@@ -2824,12 +2825,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     if (video.isLaola) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => LaolaStreamExtractor(
-          pageUrl: video.linkUrl!,
-          title: '${video.tournament} – ${video.teams}'.trim(),
-        ),
-      ));
+      _openLaolaVideo(video);
       return;
     }
     if (video.isExternal) {
@@ -2898,6 +2894,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (_) => PlayerScreen(
         title: video.teams,
         streamUrl: url,
+      ),
+    ));
+  }
+
+  /// Laola-Video oeffnen. Erst der Direktweg ohne WebView (LaolaDirect),
+  /// sonst wie bisher ueber den Extractor.
+  ///
+  /// Der Direktweg holt die signierte Stream-URL mit einem HTTP-Aufruf statt
+  /// laola1s Player-Seite in eine WebView zu laden und die m3u8 per JS-Hook
+  /// abzufangen — kein Seitenaufbau, kein Player-Init, keine Werbung.
+  /// Gespielt wird in beiden Faellen im nativen PlayerScreen, der fuer Laola
+  /// ohnehin schon eingerichtet ist (Variantenwahl + Referer/Origin).
+  ///
+  /// Liefert der Direktweg nichts — typisch bei einem Livestream der noch
+  /// nicht gestartet ist —, laeuft alles unveraendert wie vorher.
+  Future<void> _openLaolaVideo(VideoItem video) async {
+    final titel = '${video.tournament} – ${video.teams}'.trim();
+    final id = LaolaDirect.idFromPageUrl(video.linkUrl);
+    if (id != null) {
+      final url = await LaolaDirect.streamUrl(id);
+      if (url != null && mounted) {
+        _stopPreloadForPlayback();
+        await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => PlayerScreen(title: titel, streamUrl: url),
+        ));
+        return;
+      }
+    }
+    if (!mounted) return;
+    _stopPreloadForPlayback();
+    await Navigator.push(context, MaterialPageRoute(
+      builder: (_) => LaolaStreamExtractor(
+        pageUrl: video.linkUrl!,
+        title: titel,
       ),
     ));
   }
