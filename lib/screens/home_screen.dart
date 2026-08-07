@@ -2853,7 +2853,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             })));
 
         publishTimer?.cancel();
-        final unique = [...collected]..sort(_videoOrder);
+
+        // Endstand so zusammensetzen, dass der sichtbare Anfang UNVERAENDERT
+        // bleibt: erst die Kopf-Items in ihrer Sortierung, danach der Rest.
+        //
+        // Vorher wurde hier alles zusammen neu sortiert. Dass die Kopf-Items
+        // trotzdem oben bleiben, war eine ANNAHME (Kopf = juengste Turniere,
+        // Rest = aeltere) — und sie hat nicht gehalten: die Kacheln haben
+        // sich weiter verschoben. Jetzt haengt es nicht mehr an der Annahme,
+        // sondern an der Reihenfolge selbst.
+        //
+        // Preis: ein Video aus einem aelteren Turnier, das trotzdem neuer
+        // waere als etwas aus den Kopf-Quellen, steht weiter unten als es
+        // chronologisch gehoert. Bei "drei juengste Turniere + Live-Quellen"
+        // als Kopf ist das ein Randfall.
+        final kopfSortiert = [...kopfItems]..sort(_videoOrder);
+        final kopfIds = kopfSortiert.map((v) => v.id).toSet();
+        final restSortiert = [
+          for (final v in collected)
+            if (!kopfIds.contains(v.id)) v
+        ]..sort(_videoOrder);
+        final unique = [...kopfSortiert, ...restSortiert];
         _videosCache[pid] = unique;
         _lastAggregateRefresh = DateTime.now();
         if (_videosLoadEpoch == epoch && mounted) {

@@ -183,6 +183,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// gegeben werden — sonst antwortet Akamai mit 403 auf die Variant-/Segment-
   /// Requests. Liefert null wenn was schiefgeht (Caller fällt auf Master+ABR
   /// zurück).
+  /// Antwortet diese Variante ueberhaupt? Kurzer Abruf mit knapper Frist —
+  /// eine tote Variante soll den Start nicht ausbremsen.
+  Future<bool> _variantErreichbar(String url, String cookieHeader) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      if (_needsLaolaHeaders) {
+        req.headers.set('Referer', 'https://www.laola1.at/');
+        req.headers.set('Origin', 'https://www.laola1.at');
+      }
+      if (cookieHeader.isNotEmpty) req.headers.set('Cookie', cookieHeader);
+      req.headers.set('User-Agent',
+          'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
+      final res = await req.close().timeout(const Duration(seconds: 3));
+      await res.drain();
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[laola-player] Variant-Pruefung fehlgeschlagen: $e');
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<_BestVariant?> _pickBestVariantWithCookies(String masterUrl) async {
     try {
       final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
@@ -223,9 +247,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
         final lines = body.split('\n');
         final base = Uri.parse(masterUrl);
-        int bestHeight = 0;
-        int bestBw = -1;
-        String? bestUrl;
+        // (Hoehe, Bandbreite, Adresse) je Variante.
+        final kandidaten = <(int, int, String)>[];
         for (var i = 0; i < lines.length - 1; i++) {
           final l = lines[i].trim();
           if (!l.startsWith('#EXT-X-STREAM-INF')) continue;
@@ -236,18 +259,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
               0;
           final resm = RegExp(r'RESOLUTION=\d+x(\d+)').firstMatch(l);
           final height = resm != null ? int.parse(resm.group(1)!) : 0;
-          if (height > bestHeight ||
-              (height == bestHeight && bw > bestBw)) {
-            bestHeight = height;
-            bestBw = bw;
-            bestUrl = base.resolve(next).toString();
-          }
+          kandidaten.add((height, bw, base.resolve(next).toString()));
         }
-        if (bestUrl == null) return null;
-        debugPrint(
-            '[laola-player] picked variant ${bestHeight}p ($bestBw bps), '
-            'cookies=${cookiePairs.length}');
-        return _BestVariant(bestUrl, bestHeight, bestBw, cookieHeader);
+        if (kandidaten.isEmpty) return null;
+
+        // Nach Qualitaet sortieren und die erste nehmen, die tatsaechlich
+        // ANTWORTET.
+        //
+        // Grund: laola1 listet Stufen teils doppelt, und einzelne dieser
+        // Eintraege sind toter Link. Beim Wolfurt-Center-Court war der erste
+        // 720p-Eintrag ein 404, der zweite lief — die App nagelte die kaputte
+        // fest und spielte nichts, waehrend laola1s eigener Player
+        // weiterprobierte. Gemessen: von zehn Varianten waren zwei tot.
+        kandidaten.sort((a, b) {
+          final h = b.$1.compareTo(a.$1);
+          return h != 0 ? h : b.$2.compareTo(a.$2);
+        });
+
+        for (final (height, bw, url) in kandidaten) {
+          if (!await _variantErreichbar(url, cookieHeader)) {
+            debugPrint('[laola-player] Variante ${height}p ($bw bps) '
+                'antwortet nicht — naechste');
+            continue;
+          }
+          debugPrint('[laola-player] picked variant ${height}p ($bw bps), '
+              'cookies=${cookiePairs.length}');
+          return _BestVariant(url, height, bw, cookieHeader);
+        }
+        debugPrint('[laola-player] keine Variante erreichbar -> Master + ABR');
+        return null;
       } finally {
         client.close(force: true);
       }
