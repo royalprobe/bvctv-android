@@ -2632,6 +2632,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (pid == _allId) {
+        // ZUERST auf den Laola-/Twitch-Scrape warten, DANN die Quellen
+        // anlegen.
+        //
+        // Vorher stand dieses Warten weiter unten, kurz vor dem Anzeigen —
+        // zu spaet: die Laola-Future wurde da laengst erzeugt und lieferte
+        // eine leere Liste, weil der Scrape noch lief. Der zweite Durchlauf
+        // hatte die Live-Courts dann doch und schob sie nach vorne.
+        // Gemessen auf dem Fire Stick: zwei Endstaende im Abstand von 0,8s,
+        // beide mit 2463 Videos, aber unterschiedlicher Reihenfolge.
+        if (!silent) await _warteAufZusatzquellen();
+
         final ctx = _buildCtx();
         // VBW-Playlists + Bridge-Virtual-Tournaments nur wenn der VBTV-
         // Toggle aktiv ist — sonst leaken VBW-Videos in "Alle Turniere"
@@ -2852,10 +2863,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Kostet in der Regel keine Zeit: der Scrape startet jetzt sofort
         // beim App-Start (vorher erst nach 8s) und ist meist schon fertig,
         // bevor die VBW-Playlists durch sind.
-        if (!silent) {
-          await _warteAufZusatzquellen();
-        }
-
         if (!silent) {
           for (final f in kopfQuellen) {
             f.whenComplete(() {
