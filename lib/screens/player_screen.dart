@@ -338,8 +338,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _controller.value.position > const Duration(seconds: 10)) {
         await Future.delayed(const Duration(milliseconds: 100));
       }
+
+      // Und JETZT erst der eigentliche Punkt: die Position meldet den Sprung
+      // bereits, bevor von der neuen Stelle ein Bild dekodiert ist — die
+      // Oberflaeche zeigt bis dahin weiter den Frame von der Live-Kante.
+      // Genau deshalb war das Standbild nach dem ersten Fix noch da.
+      //
+      // Deshalb hier anspielen und warten, bis die Position tatsaechlich
+      // WEITERLAEUFT und nicht mehr gepuffert wird. Dann ist bewiesen, dass
+      // von der neuen Stelle dekodiert wird.
+      await _controller.play();
+      final start = _controller.value.position;
+      final frist2 = DateTime.now().add(const Duration(seconds: 3));
+      while (DateTime.now().isBefore(frist2) &&
+          (_controller.value.isBuffering ||
+              _controller.value.position <= start + const Duration(milliseconds: 400))) {
+        await Future.delayed(const Duration(milliseconds: 80));
+      }
       debugPrint('[player] Sprung an den Anfang: Position jetzt '
-          '${_controller.value.position.inSeconds}s');
+          '${_controller.value.position.inSeconds}s, '
+          'puffert=${_controller.value.isBuffering}');
     }
     setState(() {
       _isInitialized = true;
