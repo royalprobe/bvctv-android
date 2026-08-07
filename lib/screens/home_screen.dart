@@ -2575,9 +2575,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // VBW-Playlists + Bridge-Virtual-Tournaments nur wenn der VBTV-
         // Toggle aktiv ist — sonst leaken VBW-Videos in "Alle Turniere"
         // rein obwohl der User nur Laola1/GBT sehen will.
-        final Iterable<Future<List<VideoItem>>> playlistFutures = _sourceVbw
+        // Turniere, aus denen echte Playlists geladen werden. Als Liste
+        // materialisiert, weil weiter unten pro Eintrag entschieden wird, ob
+        // er den Anfang der Liste bestimmen kann (siehe istKopfQuelle).
+        final vbwTurniere = _sourceVbw
             ? _availableTournaments
                 .where((t) => !t['id']!.startsWith('__'))
+                .toList(growable: false)
+            : const <Map<String, String>>[];
+
+        // Welche Playlists koennen ueberhaupt GANZ OBEN landen?
+        //
+        // Die Liste ist nach Datum absteigend sortiert, und die langsamsten
+        // Quellen liefern ausgerechnet die neuesten Videos: Bridge-Feeds
+        // ("Latest Replays", laufende Turniere), Laola und Twitch. Wird
+        // schrittweise veroeffentlicht, baut sich deshalb staendig der
+        // ANFANG der Liste um — genau das, was verwirrt.
+        //
+        // Deshalb: die juengsten Turnier-Playlists plus die drei
+        // Aggregat-Quellen gelten als Kopf-Quellen. Erst wenn die da sind,
+        // wird ueberhaupt etwas angezeigt. Alle aelteren Playlists duerfen
+        // danach in Ruhe nachlaufen — sie sortieren sich per Definition
+        // weiter unten ein und stoeren den sichtbaren Anfang nicht.
+        final nachDatum = [...vbwTurniere]..sort(
+            (a, b) => (b['matchDate'] ?? '').compareTo(a['matchDate'] ?? ''));
+        final kopfPlaylistIds =
+            nachDatum.take(_kopfPlaylistAnzahl).map((t) => t['id']!).toSet();
+
+        final Iterable<Future<List<VideoItem>>> playlistFutures = _sourceVbw
+            ? vbwTurniere
                 .map<Future<List<VideoItem>>>((t) async {
                   final plId = t['id']!;
                   // Kurzlebiger Cache je Playlist. Beim App-Start wird die
@@ -2631,9 +2657,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ? _allTwitchVideoItemsForAggregate()
             : Future.value(const <VideoItem>[]);
 
+        // Materialisieren: die Reihenfolge entspricht vbwTurniere, darueber
+        // laesst sich zuordnen welche Playlist eine Kopf-Quelle ist.
+        final playlistList = playlistFutures.toList(growable: false);
         final sources = <Future<List<VideoItem>>>[
-          ...playlistFutures,
+          ...playlistList,
           ...vtFutures,
+          bridgeFuture,
+          laolaFuture,
+          twitchFuture,
+        ];
+
+        // Kopf-Quellen: alles was den Anfang der Liste bestimmen kann.
+        final kopfQuellen = <Future<List<VideoItem>>>[
+          for (var i = 0; i < playlistList.length; i++)
+            if (kopfPlaylistIds.contains(vbwTurniere[i]['id'])) playlistList[i],
           bridgeFuture,
           laolaFuture,
           twitchFuture,
@@ -2672,14 +2710,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
 
+        // Solange noch eine Kopf-Quelle aussteht, wird NICHT veroeffentlicht —
+        // sonst wuerde sich der Anfang der Liste unter den Augen des Users
+        // umbauen. Historische Playlists duerfen danach nachlaufen.
+        var kopfOffen = kopfQuellen.length;
+        // Eigenes Flag statt den Zaehler zu pruefen: der Aufrufer setzt ihn
+        // vor dem Aufruf auf 0, eine Zaehler-Abfrage in kopfFertig() wuerde
+        // deshalb immer sofort aussteigen und nie veroeffentlichen.
+        var kopfErledigt = false;
+        Timer? kopfNotbremse;
+
         void schedulePublish() {
           // Bei einem stillen Refresh NICHT schrittweise: die Sammlung startet
           // leer, der User saehe die Liste schrumpfen und wieder wachsen.
           if (silent || publishPending) return;
+          if (!kopfErledigt) return;
           publishPending = true;
           // Buendeln: 20 Quellen einzeln zu rendern hiesse 20 Sortierlaeufe
           // ueber bis zu 3000 Items.
           publishTimer = Timer(const Duration(milliseconds: 250), publish);
+        }
+
+        void kopfFertig() {
+          if (kopfErledigt) return;
+          kopfErledigt = true;
+          kopfOffen = 0;
+          kopfNotbremse?.cancel();
+          if (silent) return;
+          // Sofort zeigen statt auf das naechste Paket zu warten: die
+          // langsamen Playlists koennen Sekunden brauchen.
+          publishTimer?.cancel();
+          publishPending = false;
+          publish();
+        }
+
+        if (!silent) {
+          for (final f in kopfQuellen) {
+            f.whenComplete(() {
+              if (--kopfOffen <= 0) kopfFertig();
+            });
+          }
+          // Notbremse: haengt eine Kopf-Quelle (10s HTTP-Timeout pro
+          // Playlist), soll die Uebersicht trotzdem erscheinen. Lieber ein
+          // spaeteres Nachrutschen als ein Ladescreen der steht.
+          kopfNotbremse = Timer(const Duration(seconds: 6), kopfFertig);
         }
 
         await Future.wait(sources.map((f) => f.then((items) {
@@ -2827,6 +2901,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     ));
   }
+
+  /// Wie viele der juengsten VBW-Playlists als "Kopf-Quelle" gelten, also
+  /// abgewartet werden bevor die Uebersicht erscheint. Drei deckt das
+  /// laufende Turnier plus die zwei zuletzt beendeten ab — alles darunter
+  /// ist aelter und sortiert sich ohnehin weiter unten ein.
+  static const int _kopfPlaylistAnzahl = 3;
 
   /// Schnellweg fuer VBTV (signierte URL + nativer Player) — VORERST AUS.
   ///
