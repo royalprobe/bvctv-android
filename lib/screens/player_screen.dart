@@ -283,6 +283,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await _controller.seekTo(Duration.zero).catchError((e) {
         debugPrint('[player] Sprung an den Anfang nicht moeglich: $e');
       });
+      // WARTEN bis der Sprung tatsaechlich gegriffen hat.
+      //
+      // initialize() legt den ersten Frame — den von der Live-Kante —
+      // bereits auf die Oberflaeche. Geben wir den Player sofort frei,
+      // sieht man diesen Frame als Standbild, bis nach dem Sprung ein
+      // neues Bild ankommt. Genau das war sichtbar.
+      //
+      // Solange bleibt der Ladekreis stehen. Mit Frist, damit ein Stream
+      // ohne brauchbares Rueckspul-Fenster nicht ewig haengt — dann geht
+      // es eben an der Live-Kante los, so wie ohne die Option.
+      final frist = DateTime.now().add(const Duration(seconds: 4));
+      while (DateTime.now().isBefore(frist) &&
+          _controller.value.position > const Duration(seconds: 10)) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+      debugPrint('[player] Sprung an den Anfang: Position jetzt '
+          '${_controller.value.position.inSeconds}s');
     }
     setState(() {
       _isInitialized = true;
