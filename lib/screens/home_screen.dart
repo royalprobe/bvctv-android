@@ -342,9 +342,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final liveVideos =
           videos.where((v) => avail[v['id']!] ?? false).toList();
       if (liveVideos.isEmpty) continue;
+
+      // Pro Court nur EINEN Eintrag. laola1 vergibt pro Court mehrere
+      // Sessions ueber das Turnier verteilt (in Wolfurt: Center Court hatte
+      // drei IDs, Court 2 zwei). Ohne diese Reduktion standen alle
+      // verfuegbaren Kandidaten in der Liste — beobachtet 7 Eintraege statt
+      // 3, und bei den zusaetzlichen kam beim Antippen nichts.
+      //
+      // Der Verfuegbarkeits-Check allein genuegt dafuer nicht: er faellt bei
+      // einer Zeitueberschreitung bewusst auf "sichtbar" zurueck, und dann
+      // rutscht eine noch nicht gestartete Session doch wieder rein. Diese
+      // Reduktion begrenzt die Liste unabhaengig davon.
+      //
+      // Tie-Breaker ist die hoechste ID unter den VERFUEGBAREN — dieselbe
+      // Regel wie in der Web-Variante.
+      final proCourt = <String, Map<String, String>>{};
+      for (final v in liveVideos) {
+        final court = v['court'] ?? v['title'] ?? v['id']!;
+        final bisher = proCourt[court];
+        if (bisher == null ||
+            (int.tryParse(v['id']!) ?? 0) > (int.tryParse(bisher['id']!) ?? 0)) {
+          proCourt[court] = v;
+        }
+      }
+      final eindeutig = proCourt.values.toList();
+
       validated.add({
         ...t,
-        'videos': liveVideos,
+        'videos': eindeutig,
       });
     }
 
@@ -2098,8 +2123,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'Referer': 'https://www.laola1.at/',
             'Origin': 'https://www.laola1.at',
           },
-        ).timeout(const Duration(seconds: 4));
-        final live = res.statusCode != 400;
+        ).timeout(const Duration(seconds: 8));
+        // NUR 200 zaehlt als live — wie in der Web-Variante. Vorher galt
+        // alles ausser 400 als live, damit waeren auch 403/500 oder eine
+        // Fehlerseite als laufender Court durchgegangen.
+        final live = res.statusCode == 200;
         debugPrint('[laola-avail] $id POST /access/hls → ${res.statusCode} '
             '(live=$live)');
         return MapEntry(id, live);

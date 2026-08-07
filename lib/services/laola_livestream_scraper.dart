@@ -109,6 +109,11 @@ class LaolaLivestreamScraper {
         'thumbnail': '',
         'series': series,
         'location': location,
+        // Court-Kennung mitgeben. Ohne sie kann der Aufrufer nach dem
+        // Verfuegbarkeits-Check nicht mehr "einen pro Court" auswaehlen —
+        // dann stehen fuer denselben Court mehrere Sessions in der Liste
+        // (beobachtet in Wolfurt: 7 Eintraege statt 3).
+        'court': courtSlug,
       });
     }
 
@@ -144,6 +149,7 @@ class LaolaLivestreamScraper {
                   'title': c['title']!,
                   'url': c['url']!,
                   'thumbnail': c['thumbnail']!,
+                  'court': c['court']!,
                 })
             .toList(),
       });
