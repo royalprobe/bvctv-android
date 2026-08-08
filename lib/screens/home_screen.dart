@@ -3743,15 +3743,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Source-Toggle-Chip (VBTV/Laola1/GBT). Optisch identisch zum
   /// _filterChip, aber toggle-basiert statt Radio-Auswahl: aktiv = orange,
   /// inaktiv = ausgegraut.
-  /// Quellen-Umschalter als Dienst-Logo statt Textknopf.
+  /// Quellen-Umschalter: Dienst-Logo UND Name.
   ///
-  /// [label] bleibt als Vorlesetext erhalten — ohne ihn waere der Knopf fuer
-  /// die Bedienungshilfen namenlos.
+  /// Nur das Logo war zu klein zum Erkennen, und in dieser Zeile ist
+  /// reichlich Platz.
   ///
-  /// Aus-Zustand: graustufig und blass. Ohne Beschriftung muss der
-  /// Unterschied deutlicher ausfallen als bei den frueheren Textknoepfen,
-  /// Farbe allein traegt das nicht. Der orange Rahmen markiert zusaetzlich
-  /// den Ein-Zustand — auf dem Fernseher sitzt man weit weg.
+  /// Aus-Zustand: graustufig und blass. Farbe allein traegt den Unterschied
+  /// nicht, sobald ein buntes Logo danebensteht. Der orange Rahmen markiert
+  /// zusaetzlich den Ein-Zustand — auf dem Fernseher sitzt man weit weg.
   Widget _sourceChip(String label, String src) {
     final selected = src == 'vbw'
         ? _sourceVbw
@@ -3765,48 +3764,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'laola': 'assets/sources/laola.png',
       'twitch': 'assets/sources/gbt.png',
     };
-    final bild = Image.asset(
+    Widget bild = Image.asset(
       dateien[src] ?? 'assets/sources/vbtv.png',
-      width: 30,
-      height: 30,
+      width: 26,
+      height: 26,
       fit: BoxFit.cover,
       // Fehlt das Asset (Tippfehler im pubspec), waere sonst ein rotes
-      // Fehlerquadrat auf dem Fernseher zu sehen.
-      errorBuilder: (_, _, _) => Text(label,
-          style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      // Fehlerquadrat auf dem Fernseher zu sehen. Der Name steht daneben,
+      // der Knopf bleibt also auch dann bedienbar und beschriftet.
+      errorBuilder: (_, _, _) => const SizedBox(width: 26, height: 26),
     );
-    return Semantics(
-      label: label,
-      toggled: selected,
-      child: TvFocusButton(
-        onPressed: () => _toggleSource(src),
-        borderRadius: 12,
-        child: Container(
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: selected ? Colors.orange : Colors.transparent,
-              width: 2,
-            ),
+    bild = ClipRRect(borderRadius: BorderRadius.circular(6), child: bild);
+    if (!selected) {
+      bild = Opacity(
+        opacity: 0.4,
+        child: ColorFiltered(
+          colorFilter: const ColorFilter.matrix(<double>[
+            0.2126, 0.7152, 0.0722, 0, 0,
+            0.2126, 0.7152, 0.0722, 0, 0,
+            0.2126, 0.7152, 0.0722, 0, 0,
+            0, 0, 0, 1, 0,
+          ]),
+          child: bild,
+        ),
+      );
+    }
+    return TvFocusButton(
+      onPressed: () => _toggleSource(src),
+      borderRadius: 20,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(3, 3, 12, 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(20),
+          // Rahmenbreite bleibt konstant, nur die Farbe wechselt — sonst
+          // springt die Zeile beim Umschalten um zwei Pixel.
+          border: Border.all(
+            color: selected ? Colors.orange : Colors.white24,
+            width: 2,
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: selected
-                ? bild
-                : Opacity(
-                    opacity: 0.35,
-                    child: ColorFiltered(
-                      colorFilter: const ColorFilter.matrix(<double>[
-                        0.2126, 0.7152, 0.0722, 0, 0,
-                        0.2126, 0.7152, 0.0722, 0, 0,
-                        0.2126, 0.7152, 0.0722, 0, 0,
-                        0, 0, 0, 1, 0,
-                      ]),
-                      child: bild,
-                    ),
-                  ),
-          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            bild,
+            const SizedBox(width: 7),
+            Text(label, style: TextStyle(
+              color: selected ? Colors.white : Colors.white38,
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            )),
+          ],
         ),
       ),
     );
