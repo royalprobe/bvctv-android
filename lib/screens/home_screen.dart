@@ -3743,6 +3743,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Source-Toggle-Chip (VBTV/Laola1/GBT). Optisch identisch zum
   /// _filterChip, aber toggle-basiert statt Radio-Auswahl: aktiv = orange,
   /// inaktiv = ausgegraut.
+  /// Quellen-Umschalter als Dienst-Logo statt Textknopf.
+  ///
+  /// [label] bleibt als Vorlesetext erhalten — ohne ihn waere der Knopf fuer
+  /// die Bedienungshilfen namenlos.
+  ///
+  /// Aus-Zustand: graustufig und blass. Ohne Beschriftung muss der
+  /// Unterschied deutlicher ausfallen als bei den frueheren Textknoepfen,
+  /// Farbe allein traegt das nicht. Der orange Rahmen markiert zusaetzlich
+  /// den Ein-Zustand — auf dem Fernseher sitzt man weit weg.
   Widget _sourceChip(String label, String src) {
     final selected = src == 'vbw'
         ? _sourceVbw
@@ -3751,21 +3760,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : src == 'twitch'
                 ? _sourceTwitch
                 : false;
-    return TvFocusButton(
-      onPressed: () => _toggleSource(src),
-      borderRadius: 20,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? Colors.orange : const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? Colors.orange : Colors.white24),
+    const dateien = {
+      'vbw': 'assets/sources/vbtv.png',
+      'laola': 'assets/sources/laola.png',
+      'twitch': 'assets/sources/gbt.png',
+    };
+    final bild = Image.asset(
+      dateien[src] ?? 'assets/sources/vbtv.png',
+      width: 30,
+      height: 30,
+      fit: BoxFit.cover,
+      // Fehlt das Asset (Tippfehler im pubspec), waere sonst ein rotes
+      // Fehlerquadrat auf dem Fernseher zu sehen.
+      errorBuilder: (_, _, _) => Text(label,
+          style: const TextStyle(color: Colors.white70, fontSize: 12)),
+    );
+    return Semantics(
+      label: label,
+      toggled: selected,
+      child: TvFocusButton(
+        onPressed: () => _toggleSource(src),
+        borderRadius: 12,
+        child: Container(
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? Colors.orange : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: selected
+                ? bild
+                : Opacity(
+                    opacity: 0.35,
+                    child: ColorFiltered(
+                      colorFilter: const ColorFilter.matrix(<double>[
+                        0.2126, 0.7152, 0.0722, 0, 0,
+                        0.2126, 0.7152, 0.0722, 0, 0,
+                        0.2126, 0.7152, 0.0722, 0, 0,
+                        0, 0, 0, 1, 0,
+                      ]),
+                      child: bild,
+                    ),
+                  ),
+          ),
         ),
-        child: Text(label, style: TextStyle(
-          color: selected ? Colors.black : Colors.white38,
-          fontSize: 13,
-          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-        )),
       ),
     );
   }
