@@ -170,11 +170,52 @@ class TwitchStream {
   /// laufen kann.
   static String? lastAbsageGrund;
 
+  /// Unsere Web-App. Sie kann die zwei geo-geprueften Twitch-Anfragen ueber
+  /// einen deutschen Ausgang schicken (siehe geoProxy.js dort) — noetig, seit
+  /// die GBT-Inhalte auf Deutschland beschraenkt sind.
+  static const _serverBase = 'https://bvctv-web-production.up.railway.app';
+
   /// videoId ist entweder eine numerische VOD-ID oder `live-<login>`.
-  /// Liefert die signed usher.ttvnw.net-Master-m3u8 URL, oder null bei
-  /// Netz-/API-Fehler.
+  /// Liefert eine abspielbare Master-m3u8-URL, oder null.
+  ///
+  /// ZUERST der Direktweg vom Geraet: schnell, ohne Abhaengigkeit von unserem
+  /// Server, und fuer alles ausser GBT der Normalfall. Nur wenn Twitch
+  /// ausdruecklich sperrt, geht es ueber den Server — der holt die
+  /// Master-Playlist ueber Deutschland und reicht sie durch. Danach laufen
+  /// Varianten und Segmente wieder direkt vom Twitch-CDN aufs Geraet, weil
+  /// die Adressen darin absolut und nicht geo-geprueft sind.
   static Future<String?> extractMasterUrl(String videoId) async {
     lastAbsageGrund = null;
+    final direkt = await _masterDirekt(videoId);
+    if (direkt != null) return direkt;
+    // Netz- oder API-Fehler: der Umweg wuerde daran nichts aendern.
+    if (lastAbsageGrund == null) return null;
+    return _masterUeberServer(videoId);
+  }
+
+  /// Holt die Master-Playlist ueber unsere Web-App. Rueckgabe ist deren
+  /// URL — der Player laedt die Datei selbst nochmal, das ist rund ein
+  /// Kilobyte und faellt nicht ins Gewicht.
+  static Future<String?> _masterUeberServer(String videoId) async {
+    final url =
+        '$_serverBase/api/twitch-master/${Uri.encodeComponent(videoId)}';
+    try {
+      final r = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200 && r.body.contains('#EXTM3U')) {
+        debugPrint('[twitch-stream] ueber Server geloest (deutscher Ausgang)');
+        lastAbsageGrund = null;
+        return url;
+      }
+      debugPrint('[twitch-stream] Server-Umweg: HTTP ${r.statusCode}');
+    } catch (e) {
+      debugPrint('[twitch-stream] Server-Umweg fehlgeschlagen: $e');
+    }
+    return null;
+  }
+
+  static Future<String?> _masterDirekt(String videoId) async {
     try {
       final isLive = videoId.startsWith('live-');
       final login = isLive ? videoId.substring(5) : '';
