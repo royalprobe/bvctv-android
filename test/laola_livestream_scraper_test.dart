@@ -2,8 +2,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vbtv_app/services/laola_livestream_scraper.dart';
 
 /// Baut ein Stueck laola1-aehnliches HTML aus Player-Links.
-String html(List<String> hrefs) =>
-    hrefs.map((h) => '<a href="$h">Link</a>').join('\n');
+///
+/// Die Klasse am Anker ist NICHT schmueckendes Beiwerk: nur damit gilt ein
+/// Link als Livestream. Die Seite fuehrt daneben ein Archiv mit demselben
+/// Link-Format, aber der Klasse `video-slider-card__link`.
+String html(List<String> hrefs) => hrefs
+    .map((h) => '<a class="livestream-card__link" href="$h">Link</a>')
+    .join('\n');
+
+/// Archiv-Eintrag — gleiches Link-Format, andere Klasse.
+String archivHtml(List<String> hrefs) => hrefs
+    .map((h) => '<a class="video-slider-card__link" href="$h">Link</a>')
+    .join('\n');
 
 String player(String id, String slug) => '/de/video/player/$id/$slug/';
 
@@ -94,6 +104,40 @@ void main() {
       ]));
       final video = (r.first['videos'] as List).first as Map<String, String>;
       expect(video['title'], 'Medaillen Entscheidung');
+    });
+
+    /// Regression 08.08.2026: die Livestream-Seite fuehrt UNTER den
+    /// Livestreams noch ein Archiv mit demselben Link-Format. Ohne
+    /// Unterscheidung stand die Medaillen-Entscheidung von Tulln (Turnier
+    /// laengst vorbei, Laufzeit 4:13:46) als Livestream-Kachel mit dem
+    /// heutigen Datum in der Uebersicht.
+    test('ignoriert Archiv-Aufzeichnungen auf derselben Seite', () {
+      final r = LaolaLivestreamScraper.parseHtml(archivHtml([
+        player('2198938', 'win2day-beach-tour-pro-open-tulln--medaillen-entscheidung'),
+      ]));
+      expect(r, isEmpty);
+    });
+
+    test('nimmt nur den Livestream, nicht die Aufzeichnung daneben', () {
+      final gemischt = html([
+            player('2208841', 'win2day-beach-tour-pro-masters-wolfurt---center-court'),
+          ]) +
+          archivHtml([
+            player('2198938', 'win2day-beach-tour-pro-open-tulln--medaillen-entscheidung'),
+          ]);
+      final r = LaolaLivestreamScraper.parseHtml(gemischt);
+      expect(r, hasLength(1));
+      expect(r.first['tournament'], 'win2day PRO MASTERS Wolfurt');
+    });
+
+    /// Bewusst KEIN Rueckfall auf "alle Player-Links": an einem Tag ohne
+    /// Uebertragung gibt es keine Livestream-Anker, und der Rueckfall wuerde
+    /// dann das Archiv einlesen.
+    test('liefert nichts, wenn kein Link als Livestream ausgezeichnet ist', () {
+      final r = LaolaLivestreamScraper.parseHtml(
+        '<a href="/de/video/player/600/win2day-beach-tour-pro-masters-wolfurt---court-2/">x</a>',
+      );
+      expect(r, isEmpty);
     });
 
     test('kommt mit leerem HTML klar', () {

@@ -20,6 +20,20 @@ class LaolaLivestreamScraper {
   static final RegExp _playerRe =
       RegExp(r'/de/video/player/(\d+)/([a-z0-9][a-z0-9\-]*)/');
 
+  /// Klasse am Anker, die einen ECHTEN Livestream-Eintrag auszeichnet.
+  ///
+  /// Die Seite fuehrt zwei Bereiche mit demselben Link-Format:
+  ///   <a class="livestream-card__link"   …>  laufend / angesetzt
+  ///   <a class="video-slider-card__link" …>  Archiv-Aufzeichnung
+  /// Ohne diese Unterscheidung landen alte Aufzeichnungen als vermeintliche
+  /// Livestreams in der Uebersicht — beobachtet am 08.08.2026: die
+  /// Medaillen-Entscheidung von Tulln (ID 2198938, Laufzeit 4:13:46) stand
+  /// als Kachel mit dem heutigen Datum in der Liste, obwohl das Turnier
+  /// laengst vorbei war. Der Verfuegbarkeits-Check half nicht: der prueft
+  /// nur, ob sich etwas abspielen laesst, und eine Aufzeichnung laesst sich
+  /// abspielen.
+  static const String _livestreamKlasse = 'livestream-card__link';
+
   /// Trennt im Slug: serie, location-bezeichner -- (oder ---) court.
   /// Praefix vor `pro-<serie>-` ist bewusst NICHT verankert (kein `^`),
   /// weil laola1.at den Slug ueber die Jahre mehrfach umgebaut hat:
@@ -89,7 +103,7 @@ class LaolaLivestreamScraper {
     // "serie:location:court" -> alle Kandidaten-Videos fuer diesen Court
     final byKey = <String, List<Map<String, String>>>{};
 
-    for (final m in _playerRe.allMatches(html)) {
+    for (final m in _livestreamLinks(html)) {
       final id = m.group(1)!;
       final slug = m.group(2)!;
       if (seenIds.contains(id)) continue;
@@ -161,6 +175,41 @@ class LaolaLivestreamScraper {
     }
 
     return result;
+  }
+
+  /// Alle Player-Links, die an einem Livestream-Anker haengen.
+  ///
+  /// Zerlegt bewusst am Anker statt mit einem grossen Regex ueber das ganze
+  /// Dokument: die Reihenfolge von class und href ist nicht garantiert, ein
+  /// Regex mit fester Reihenfolge waere stillschweigend kaputt, sobald
+  /// laola1 die Attribute tauscht.
+  ///
+  /// KEIN Rueckfall auf "alle Player-Links", falls sich keiner findet. Das
+  /// war der erste Entwurf, ist aber falsch: an einem Tag ohne laufende
+  /// Uebertragung gibt es schlicht keine Livestream-Anker, und der Rueckfall
+  /// wuerde dann ausgerechnet das Archiv einlesen — also genau der Fehler,
+  /// den diese Methode verhindern soll. Eine leere Liste ist der Normalfall
+  /// an den meisten Tagen; eine falsche Kachel mit dem heutigen Datum ist es
+  /// nicht.
+  static Iterable<RegExpMatch> _livestreamLinks(String html) {
+    final treffer = <RegExpMatch>[];
+    var playerLinks = 0;
+    for (final teil in html.split('<a ')) {
+      final tagEnde = teil.indexOf('>');
+      if (tagEnde < 0) continue;
+      final tag = teil.substring(0, tagEnde);
+      final m = _playerRe.firstMatch(tag);
+      if (m == null) continue;
+      playerLinks++;
+      if (tag.contains(_livestreamKlasse)) treffer.add(m);
+    }
+    // Nur auffaellig, wenn es ueberhaupt Player-Links gibt: dann koennte
+    // laola1 die Klasse umbenannt haben, und wir waeren blind.
+    if (treffer.isEmpty && playerLinks > 0) {
+      debugPrint('[laola-scrape] $playerLinks Player-Links, aber keiner mit '
+          '"$_livestreamKlasse" — Auszeichnung geaendert?');
+    }
+    return treffer;
   }
 
   /// "center-court" -> "Center Court"
