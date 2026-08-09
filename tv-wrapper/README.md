@@ -38,6 +38,25 @@ PATH und scheitert beim Reservieren des Speichers.
   keinen Zeiger, der als solche zaehlt.
 - Zurueck-Taste blaettert im Verlauf der Web-App zurueck, statt die App
   sofort zu schliessen.
+- **Eigene Mediensitzung (MediaSession)** — ohne sie bleiben Anhalten/Weiter
+  und der Vorlauf wirkungslos. Fire OS liefert Medientasten nicht an die
+  Vordergrund-App, sondern an die aktive Mediensitzung; ohne eigene landeten
+  sie bei Amazons External-Media-Player-Dienst. Nachweis:
+  `adb shell dumpsys media_session` zeigt jetzt
+  `Media button session is at.bvclustenau.bvctvweb/BVCTV`.
+  Die eigentliche Arbeit macht danach die WebView selbst — der Draht
+  `window.bvctvFernbedienung` in player.js ist ein Rueckhalt, der derzeit
+  nicht gebraucht wird.
+
+## Pruefen ohne Bildschirmfoto
+
+`adb shell screencap` liefert bei laufendem Video ein **weisses** Bild — die
+Videoflaeche laesst sich nicht abfotografieren (die WebView hat dafuer sogar
+einen eigenen Schalter namens `awv-chrome-inspect-fix-white-video`). Ob
+etwas laeuft, verraet stattdessen das Protokoll:
+
+    adb shell dumpsys audio | grep "u/pid:<uid>/"      # state:started
+    adb logcat -d | grep "resume detected\|seek found" # Pause / Sprung
 
 **Fuer den Alltag auf dem Fernseher bleibt die native App die bessere
 Wahl** — nativer Player, feste 1080p, echte Fokussteuerung. Diese Huelle ist
