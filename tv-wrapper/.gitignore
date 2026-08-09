@@ -1,0 +1,4 @@
+build/
+.gradle/
+# Enthaelt den SDK-Pfad dieses Rechners.
+local.properties
