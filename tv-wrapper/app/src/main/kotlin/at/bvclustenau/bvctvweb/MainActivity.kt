@@ -30,6 +30,8 @@ class MainActivity : Activity() {
 
     private lateinit var web: WebView
     private lateinit var sitzung: MediaSession
+    private var letzterBefehl = ""
+    private var letzterBefehlZeit = 0L
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,15 +120,18 @@ class MainActivity : Activity() {
     /// stellt das System gar nicht erst zu.
     private fun mediensitzungAnlegen() {
         sitzung = MediaSession(this, "BVCTV").apply {
-            setCallback(object : MediaSession.Callback() {
-                override fun onPlay() = anDieSeite("playpause")
-                override fun onPause() = anDieSeite("playpause")
-                override fun onFastForward() = anDieSeite("vor")
-                override fun onRewind() = anDieSeite("zurueck")
-                override fun onSkipToNext() = anDieSeite("vor")
-                override fun onSkipToPrevious() = anDieSeite("zurueck")
-                override fun onStop() = anDieSeite("stop")
-            })
+            // ABSICHTLICH LEER. Die Sitzung dient nur dazu, die
+            // Medientasten fuer uns zu beanspruchen — danach stellt Fire OS
+            // sie als gewoehnliche Tastenereignisse im Fenster zu, und dort
+            // holen wir sie ab (dispatchKeyEvent) bzw. die WebView setzt sie
+            // selbst um (Anhalten/Weiter).
+            //
+            // Ausgefuellte Rueckrufe waren ein Fehler: derselbe Druck kam
+            // dann ueber zwei Wege an. Gemessen wurden fuer EINEN Druck auf
+            // die Ruecklauftaste drei Zustellungen innerhalb von 700 ms —
+            // die Geschwindigkeit waere von 8x in einem Rutsch auf 1x
+            // gefallen.
+            setCallback(object : MediaSession.Callback() {})
             setPlaybackState(
                 PlaybackState.Builder()
                     .setActions(
@@ -152,11 +157,45 @@ class MainActivity : Activity() {
     /// Befehl in die Seite reichen. Auf der Uebersicht gibt es die Funktion
     /// nicht — der Aufruf ist dort ein wirkungsloser Leerlauf.
     private fun anDieSeite(befehl: String) {
+        // Rueckhalt gegen Mehrfachzustellung. Die Hauptursache ist mit dem
+        // leeren Sitzungs-Rueckruf beseitigt, aber ein zweiter Weg wuerde
+        // sonst unbemerkt eine Stufe ueberspringen.
+        val jetzt = android.os.SystemClock.uptimeMillis()
+        if (befehl == letzterBefehl && jetzt - letzterBefehlZeit < 400) return
+        letzterBefehl = befehl
+        letzterBefehlZeit = jetzt
         Log.i(TAG, "fernbedienung: $befehl")
         web.evaluateJavascript(
             "window.bvctvFernbedienung && window.bvctvFernbedienung('$befehl')",
             null,
         )
+    }
+
+    /// Vor- und Ruecklauftaste abfangen, BEVOR die WebView sie sieht.
+    ///
+    /// Die WebView wertet sie von sich aus als Zeitsprung — genau das, was
+    /// das Steuerkreuz ohnehin macht. Gewuenscht ist stattdessen die
+    /// Abspielgeschwindigkeit (2x, 4x, 8x und wieder zurueck). In onKeyDown
+    /// waere es zu spaet: dort kommen die Tasten gar nicht mehr an, die
+    /// WebView hat sie dann schon verbraucht.
+    ///
+    /// Auch das Loslassen wird geschluckt, sonst reicht die WebView das
+    /// halbe Ereignispaar durch.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val befehl = when (event.keyCode) {
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "schneller"
+            KeyEvent.KEYCODE_MEDIA_REWIND -> "langsamer"
+            else -> null
+        }
+        if (befehl != null) {
+            // Nur der erste Druck zaehlt. Beim Gedrueckthalten wuerde die
+            // Wiederholrate sonst in einem Wimpernschlag auf 8x springen.
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                anDieSeite(befehl)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -171,10 +210,7 @@ class MainActivity : Activity() {
             KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE -> "playpause"
 
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
             KeyEvent.KEYCODE_MEDIA_NEXT -> "vor"
-
-            KeyEvent.KEYCODE_MEDIA_REWIND,
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "zurueck"
 
             KeyEvent.KEYCODE_MEDIA_STOP -> "stop"

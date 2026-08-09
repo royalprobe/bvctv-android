@@ -48,6 +48,15 @@ PATH und scheitert beim Reservieren des Speichers.
   `window.bvctvFernbedienung` in player.js ist ein Rueckhalt, der derzeit
   nicht gebraucht wird.
 
+- **Vor-/Ruecklauftaste steuern die Geschwindigkeit** (1x, 2x, 4x, 8x), nicht
+  den Zeitsprung — Zeitspruenge macht das Steuerkreuz. Abgefangen wird in
+  `dispatchKeyEvent`, nicht in `onKeyDown`: dort waere es zu spaet, die
+  WebView hat die Tasten dann schon als Sprung verbraucht.
+- Der Sitzungs-Rueckruf ist **absichtlich leer**. Ausgefuellt kam derselbe
+  Druck ueber zwei Wege an — gemessen drei Zustellungen fuer EINEN Druck
+  innerhalb von 700 ms, die Geschwindigkeit waere von 8x in einem Rutsch auf
+  1x gefallen.
+
 ## Pruefen ohne Bildschirmfoto
 
 `adb shell screencap` liefert bei laufendem Video ein **weisses** Bild — die
@@ -57,6 +66,19 @@ etwas laeuft, verraet stattdessen das Protokoll:
 
     adb shell dumpsys audio | grep "u/pid:<uid>/"      # state:started
     adb logcat -d | grep "resume detected\|seek found" # Pause / Sprung
+    adb logcat -d -s BVCTVWeb:I                        # eigene Meldungen
+
+Den echten Zustand der Seite liest man ueber die DevTools-Bruecke — dafuer
+ist `WebView.setWebContentsDebuggingEnabled(true)` gesetzt:
+
+    adb shell cat /proc/net/unix | grep -o webview_devtools_remote_[0-9]*
+    adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>
+    curl -s http://localhost:9222/json      # WebSocket-Adresse der Seite
+
+Danach per WebSocket `Runtime.evaluate` schicken, z. B. auf
+`document.getElementById('video').playbackRate`. So wurde die Tempo-Leiter
+nachgemessen (1 -> 2 -> 4 -> 8, Ruecklauf wieder hinunter, an beiden Enden
+sauber begrenzt).
 
 **Fuer den Alltag auf dem Fernseher bleibt die native App die bessere
 Wahl** — nativer Player, feste 1080p, echte Fokussteuerung. Diese Huelle ist
