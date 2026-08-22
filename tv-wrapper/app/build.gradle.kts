@@ -14,8 +14,8 @@ android {
         applicationId = "at.bvclustenau.bvctvweb"
         minSdk = 22
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.3.1"
+        versionCode = 6
+        versionName = "1.4.0"
     }
 
     compileOptions {

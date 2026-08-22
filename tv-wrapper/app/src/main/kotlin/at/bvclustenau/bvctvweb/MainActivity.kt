@@ -2,6 +2,7 @@ package at.bvclustenau.bvctvweb
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -222,13 +223,42 @@ class MainActivity : Activity() {
             return true
         }
         // Zurueck-Taste blaettert im Verlauf der Web-App (Player ->
-        // Uebersicht), statt die App sofort zu schliessen. Erst am Anfang
-        // des Verlaufs beendet sie.
-        if (keyCode == KeyEvent.KEYCODE_BACK && web.canGoBack()) {
-            web.goBack()
+        // Uebersicht), statt die App sofort zu schliessen.
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (web.canGoBack()) {
+                web.goBack()
+                return true
+            }
+            // Am Anfang des Verlaufs: erst nachfragen. Vorher schloss ein
+            // versehentlicher Druck die App sofort — auf der Fernbedienung
+            // liegt die Taste direkt neben dem Steuerkreuz.
+            beendenNachfragen()
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    /// Fragt nach, bevor die App geschlossen wird.
+    ///
+    /// Steht schon eine Nachfrage offen, passiert nichts weiter — sonst
+    /// stapeln sich bei mehrfachem Druck die Fenster.
+    private var frageOffen: AlertDialog? = null
+
+    private fun beendenNachfragen() {
+        if (frageOffen?.isShowing == true) return
+        frageOffen = AlertDialog.Builder(this)
+            .setTitle("BVCTV verlassen?")
+            .setMessage("Soll die App geschlossen werden?")
+            // "Nein" steht bewusst zuerst und ist vorausgewaehlt: die
+            // Fernbedienung landet damit auf der harmlosen Antwort.
+            .setNegativeButton("Nein") { d, _ -> d.dismiss() }
+            .setPositiveButton("Ja") { _, _ -> finish() }
+            .setCancelable(true)
+            .create()
+        frageOffen?.show()
+        // Vorauswahl auf "Nein" legen, damit ein weiterer Druck auf OK die
+        // App nicht doch beendet.
+        frageOffen?.getButton(AlertDialog.BUTTON_NEGATIVE)?.requestFocus()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
