@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nur der Zwischenspeicher, und dort nur die eine Datei, die der
+     Selbstaktualisierung dient. Weiter reicht die Freigabe bewusst nicht. -->
+<paths>
+    <cache-path name="aktualisierung" path="." />
+</paths>

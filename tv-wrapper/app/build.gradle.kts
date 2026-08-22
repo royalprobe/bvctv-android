@@ -14,8 +14,8 @@ android {
         applicationId = "at.bvclustenau.bvctvweb"
         minSdk = 22
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.4.0"
+        versionCode = 8
+        versionName = "1.5.0"
     }
 
     compileOptions {
@@ -34,6 +34,10 @@ android {
     }
 }
 
-// Keine Abhaengigkeiten: android.webkit.WebView steckt im System, AppCompat
-// waere fuer eine einzige Vollbild-Ansicht unnoetiger Ballast.
-dependencies { }
+// Nur das Noetigste: android.webkit.WebView steckt im System, AppCompat
+// waere fuer eine einzige Vollbild-Ansicht unnoetiger Ballast. core-ktx
+// kommt allein wegen des FileProvider dazu, ueber den die
+// Selbstaktualisierung das neue Paket an den Installer weiterreicht.
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+}

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Fuer die Selbstaktualisierung: die App holt das neue Paket und
+         uebergibt es dem System. Installiert wird nur nach Rueckfrage. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Ohne diese beiden Zeilen verweigert Fire OS die Installation: das
          Geraet hat keinen Touchscreen, und ohne die Leanback-Angabe taucht
@@ -35,5 +38,17 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Reicht das heruntergeladene Paket an den Installer weiter. Ohne
+             das lehnt Android ab Version 7 eine Datei-Adresse ab. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.dateien"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/dateipfade" />
+        </provider>
     </application>
 </manifest>

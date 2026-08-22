@@ -56,7 +56,16 @@ class MainActivity : Activity() {
         // Alles in der eigenen Ansicht halten statt an einen Browser
         // abzugeben — auf dem Fire Stick ist gar keiner installiert, ein
         // externer Aufruf liefe also ins Leere.
-        web.webViewClient = WebViewClient()
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(ansicht: WebView?, adresse: String?) {
+                super.onPageFinished(ansicht, adresse)
+                // ERST jetzt nach einer neuen Fassung sehen, und auch dann
+                // mit Abstand: Start und Aufbau der Videouebersicht sollen
+                // nichts davon merken. Die Pruefung laeuft anschliessend in
+                // einem eigenen Faden.
+                Aktualisierung.vielleichtPruefen(this@MainActivity)
+            }
+        }
         // Ohne WebChromeClient meldet die WebView kein Vollbild und keine
         // Fortschrittsanzeige an die Seite. Die Konsolenausgabe der Seite
         // landet zusaetzlich im Logcat — ohne das ist beim Suchen auf dem
@@ -222,20 +231,39 @@ class MainActivity : Activity() {
             anDieSeite(befehl)
             return true
         }
-        // Zurueck-Taste blaettert im Verlauf der Web-App (Player ->
-        // Uebersicht), statt die App sofort zu schliessen.
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (web.canGoBack()) {
-                web.goBack()
-                return true
-            }
-            // Am Anfang des Verlaufs: erst nachfragen. Vorher schloss ein
-            // versehentlicher Druck die App sofort — auf der Fernbedienung
-            // liegt die Taste direkt neben dem Steuerkreuz.
-            beendenNachfragen()
+            zurueckBehandeln()
             return true
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    /// Zurueck-Taste, in dieser Reihenfolge:
+    ///
+    ///   1. Die SEITE fragen. Liegt dort ein Fenster offen — etwa der
+    ///      Versionsverlauf —, gehoert der Druck diesem Fenster. Die Seite
+    ///      meldet mit true zurueck, dass sie es erledigt hat.
+    ///   2. Im Verlauf zurueck (Player -> Uebersicht).
+    ///   3. Sonst nachfragen, ob die App geschlossen werden soll.
+    ///
+    /// Die Antwort der Seite kommt verzoegert, deshalb geht es im Rueckruf
+    /// weiter. Die Taste ist zu diesem Zeitpunkt schon verbraucht (return
+    /// true beim Aufrufer), es kann also nichts doppelt passieren.
+    private fun zurueckBehandeln() {
+        web.evaluateJavascript(
+            "(function(){try{return !!(window.bvctvZurueck && window.bvctvZurueck());}" +
+                "catch(e){return false;}})()",
+        ) { antwort ->
+            if (antwort == "true") return@evaluateJavascript
+            if (web.canGoBack()) {
+                web.goBack()
+            } else {
+                // Vorher schloss ein versehentlicher Druck die App sofort —
+                // auf der Fernbedienung liegt die Taste direkt neben dem
+                // Steuerkreuz.
+                beendenNachfragen()
+            }
+        }
     }
 
     /// Fragt nach, bevor die App geschlossen wird.
