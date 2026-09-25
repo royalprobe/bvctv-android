@@ -46,3 +46,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Lokale Ablage: fertige APKs und sonstige Dateien, nicht versioniert
+/ablage/
