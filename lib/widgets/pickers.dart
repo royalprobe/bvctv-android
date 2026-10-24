@@ -6,6 +6,18 @@ import 'package:flutter/services.dart';
 
 import '../l10n/strings.dart';
 
+/// Fokus-Markierung für die Listenzeilen: das Standard-Grau ist am Fernseher
+/// kaum vom Hintergrund zu unterscheiden.
+Widget _focusableTiles(Widget child) => Builder(
+      builder: (context) => Theme(
+        data: Theme.of(context).copyWith(focusColor: Colors.orange.withValues(alpha: 0.35)),
+        child: ListTileTheme(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          child: child,
+        ),
+      ),
+    );
+
 class TournamentSheet extends StatefulWidget {
   final List<Map<String, String>> tournaments;
   final String currentId;
@@ -40,7 +52,7 @@ class TournamentSheetState extends State<TournamentSheet> {
       {'id': widget.allId, 'title': S.allTournaments},
       ...widget.tournaments,
     ];
-    return Column(mainAxisSize: MainAxisSize.min, children: [
+    return _focusableTiles(Column(mainAxisSize: MainAxisSize.min, children: [
       Container(
         margin: const EdgeInsets.symmetric(vertical: 10),
         width: 40, height: 4,
@@ -76,7 +88,7 @@ class TournamentSheetState extends State<TournamentSheet> {
         ),
       ),
       const SizedBox(height: 16),
-    ]);
+    ]));
   }
 }
 
@@ -132,7 +144,7 @@ class PlayerSearchSheetState extends State<PlayerSearchSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return _focusableTiles(Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
@@ -216,7 +228,7 @@ class PlayerSearchSheetState extends State<PlayerSearchSheet> {
         ),
         const SizedBox(height: 16),
       ]),
-    );
+    ));
   }
 }
 
@@ -227,7 +239,7 @@ class CountrySearchSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
+    return _focusableTiles(Column(mainAxisSize: MainAxisSize.min, children: [
       Container(
         margin: const EdgeInsets.symmetric(vertical: 10),
         width: 40, height: 4,
@@ -257,6 +269,6 @@ class CountrySearchSheet extends StatelessWidget {
         ]),
       ),
       const SizedBox(height: 16),
-    ]);
+    ]));
   }
 }
